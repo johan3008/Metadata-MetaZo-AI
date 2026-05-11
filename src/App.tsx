@@ -235,8 +235,13 @@ function AppContent() {
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['Adobe Stock']);
   const [uploadMode, setUploadMode] = useState<'Single' | 'Batch'>('Batch');
   const [statusFilter, setStatusFilter] = useState<'All' | 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ERROR'>('All');
-  const [selectedModel, setSelectedModel] = useState<string>('auto-rotate-3x');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.0-flash');
+  const [selectedGroqModel, setSelectedGroqModel] = useState<string>('meta-llama/llama-4-scout-17b-16e-instruct');
   const [apiKeys, setApiKeys] = useState<{key: string, enabled: boolean}[]>([]);
+  const [groqApiKeys, setGroqApiKeys] = useState<{key: string, enabled: boolean}[]>([]);
+  const [activeApiProvider, setActiveApiProvider] = useState<'Gemini' | 'Groq'>('Gemini');
+  const apiProviderTab = activeApiProvider;
+  const setApiProviderTab = setActiveApiProvider;
   const [keyStatuses, setKeyStatuses] = useState<Record<string, 'VALID' | 'INVALID' | 'TESTING' | 'PENDING'>>({});
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -300,11 +305,16 @@ function AppContent() {
   const [showThemeSuggestions, setShowThemeSuggestions] = useState(false);
 
   const handleSuggestIdea = async () => {
-    if (apiKeys.filter(k => k.enabled).length === 0) {
+    const isGroq = activeApiProvider === 'Groq';
+    const currentModel = isGroq ? selectedGroqModel : selectedModel;
+    const keysToUse = isGroq ? groqApiKeys : apiKeys;
+    const providerName = isGroq ? 'Groq' : 'Gemini';
+
+    if (keysToUse.filter(k => k.enabled).length === 0) {
       setDialogState({
         isOpen: true,
         title: uiLanguage === 'id' ? 'API Key Diperlukan' : 'API Key Required',
-        message: uiLanguage === 'id' ? 'Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key Gemini aktif di Pengaturan.' : 'You have not added an API Key. The system requires at least 1 active Gemini API Key in Settings.',
+        message: uiLanguage === 'id' ? `Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key ${providerName} aktif di Pengaturan.` : `You have not added an API Key. The system requires at least 1 active ${providerName} API Key in Settings.`,
         type: 'error'
       });
       return;
@@ -312,15 +322,15 @@ function AppContent() {
 
     setIsGeneratingThemes(true);
     try {
-      const keysStr = apiKeys.filter(k => k.enabled).map(k => k.key);
-      const themes = await generateSuggestedThemes(promptGenType, keysStr, selectedModel);
+      const keysStr = keysToUse.filter(k => k.enabled).map(k => k.key);
+      const themes = await generateSuggestedThemes(promptGenType, keysStr, currentModel);
       setSuggestedThemes(themes);
       setShowThemeSuggestions(true);
     } catch (err: any) {
       console.error("Error suggesting themes:", err);
       setDialogState({
         isOpen: true,
-        title: 'Gemini Generator Error',
+        title: 'Generator Error',
         message: err.message?.includes('Quota') ? err.message : 'Gagal mendapatkan ide. Silakan coba lagi.',
         type: 'warning'
       });
@@ -332,11 +342,16 @@ function AppContent() {
   const handleGeneratePrompts = async () => {
     if (!promptSubject.trim()) return;
     
-    if (apiKeys.filter(k => k.enabled).length === 0) {
+    const isGroq = activeApiProvider === 'Groq';
+    const currentModel = isGroq ? selectedGroqModel : selectedModel;
+    const keysToUse = isGroq ? groqApiKeys : apiKeys;
+    const providerName = isGroq ? 'Groq' : 'Gemini';
+
+    if (keysToUse.filter(k => k.enabled).length === 0) {
       setDialogState({
         isOpen: true,
         title: uiLanguage === 'id' ? 'API Key Diperlukan' : 'API Key Required',
-        message: uiLanguage === 'id' ? 'Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key Gemini aktif di Pengaturan.' : 'You have not added an API Key. The system requires at least 1 active Gemini API Key in Settings.',
+        message: uiLanguage === 'id' ? `Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key ${providerName} aktif di Pengaturan.` : `You have not added an API Key. The system requires at least 1 active ${providerName} API Key in Settings.`,
         type: 'error'
       });
       return;
@@ -344,7 +359,7 @@ function AppContent() {
 
     setIsGeneratingPrompts(true);
     try {
-      const keysStr = apiKeys.filter(k => k.enabled).map(k => k.key);
+      const keysStr = keysToUse.filter(k => k.enabled).map(k => k.key);
       const result = await generateAIPrompts(
         promptGenType,
         promptSubject,
@@ -355,14 +370,14 @@ function AppContent() {
         keysStr,
         promptTargetAI,
         promptAspectRatio,
-        selectedModel
+        currentModel
       );
       setGeneratedPrompts(result);
     } catch (err: any) {
       console.error("Error generating prompts:", err);
       setDialogState({
         isOpen: true,
-        title: 'Gemini Generator Error',
+        title: 'Generator Error',
         message: err.message?.includes('Quota') ? err.message : 'Gagal membuat prompt. Silakan coba lagi.',
         type: 'warning'
       });
@@ -387,7 +402,9 @@ function AppContent() {
         const data = JSON.parse(savedSettings);
         if (data.themeMode !== undefined) setThemeMode(data.themeMode);
         if (data.metadataLanguage) setSelectedLanguage(data.metadataLanguage);
+        if (data.activeApiProvider) setActiveApiProvider(data.activeApiProvider);
         if (data.geminiModel) setSelectedModel(data.geminiModel);
+        if (data.groqModel) setSelectedGroqModel(data.groqModel);
         if (data.useSystemKey !== undefined) setUseSystemKey(data.useSystemKey);
         if (data.keywordCount) setKeywordCount(data.keywordCount);
         if (data.enableUpscaling !== undefined) setEnableUpscaling(data.enableUpscaling);
@@ -401,6 +418,11 @@ function AppContent() {
       const savedApiKeys = localStorage.getItem('metazo_apikeys');
       if (savedApiKeys) {
         setApiKeys(JSON.parse(savedApiKeys));
+      }
+
+      const savedGroqApiKeys = localStorage.getItem('metazo_groq_apikeys');
+      if (savedGroqApiKeys) {
+        setGroqApiKeys(JSON.parse(savedGroqApiKeys));
       }
       
       const savedHistory = localStorage.getItem('metazo_history');
@@ -475,20 +497,23 @@ function AppContent() {
         localStorage.setItem('metazo_settings', JSON.stringify({
           themeMode,
           metadataLanguage: selectedLanguage,
+          activeApiProvider,
           geminiModel: selectedModel,
+          groqModel: selectedGroqModel,
           useSystemKey,
           keywordCount,
           enableUpscaling
         }));
         localStorage.setItem('metazo_integrations', JSON.stringify(integrations));
         localStorage.setItem('metazo_apikeys', JSON.stringify(apiKeys));
+        localStorage.setItem('metazo_groq_apikeys', JSON.stringify(groqApiKeys));
       } catch (err) {
         console.error(err);
       }
     }, 1000); // Debounce saves
 
     return () => clearTimeout(timer);
-  }, [themeMode, selectedLanguage, selectedModel, useSystemKey, keywordCount, enableUpscaling, integrations, apiKeys, isInitialLoad]);
+  }, [themeMode, selectedLanguage, activeApiProvider, selectedModel, selectedGroqModel, useSystemKey, keywordCount, enableUpscaling, integrations, apiKeys, groqApiKeys, isInitialLoad]);
 
   // Handle Theme Application
   useEffect(() => {
@@ -815,11 +840,16 @@ function AppContent() {
   };
 
   const handleAnalyzeBatch = async () => {
-    if (apiKeys.filter(k => k.enabled).length === 0 && !useSystemKey) {
+    const isGroq = activeApiProvider === 'Groq';
+    const currentModel = isGroq ? selectedGroqModel : selectedModel;
+    const keysToUse = isGroq ? groqApiKeys : apiKeys;
+    const providerName = isGroq ? 'Groq' : 'Gemini';
+
+    if (keysToUse.filter(k => k.enabled).length === 0 && !useSystemKey) {
       setDialogState({
         isOpen: true,
         title: uiLanguage === 'id' ? 'API Key Diperlukan' : 'API Key Required',
-        message: uiLanguage === 'id' ? 'Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key Gemini aktif di Pengaturan.' : 'You have not added an API Key. The system requires at least 1 active Gemini API Key in Settings.',
+        message: uiLanguage === 'id' ? `Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key ${providerName} aktif di Pengaturan.` : `You have not added an API Key. The system requires at least 1 active ${providerName} API Key in Settings.`,
         type: 'error'
       });
       return;
@@ -872,8 +902,8 @@ function AppContent() {
             selectedLanguage,
             mediaType === 'Settings' ? 'Gambar' : mediaType,
             selectedPlatforms,
-            apiKeys.filter(k => k.enabled).map(k => k.key),
-            selectedModel,
+            keysToUse.filter(k => k.enabled).map(k => k.key),
+            currentModel,
             (msg) => {
               setFileItems(prev => 
                 prev.map(item => item.id === currentItem.id ? { ...item, statusMessage: msg } : item)
@@ -931,11 +961,16 @@ function AppContent() {
   };
 
   const handleRegenerate = async (id: string) => {
-    if (apiKeys.filter(k => k.enabled).length === 0) {
+    const isGroq = activeApiProvider === 'Groq';
+    const currentModel = isGroq ? selectedGroqModel : selectedModel;
+    const keysToUse = isGroq ? groqApiKeys : apiKeys;
+    const providerName = isGroq ? 'Groq' : 'Gemini';
+
+    if (keysToUse.filter(k => k.enabled).length === 0) {
       setDialogState({
         isOpen: true,
         title: uiLanguage === 'id' ? 'API Key Diperlukan' : 'API Key Required',
-        message: uiLanguage === 'id' ? 'Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key Groq aktif di Pengaturan.' : 'You have not added an API Key. The system requires at least 1 active Groq API Key in Settings.',
+        message: uiLanguage === 'id' ? `Anda belum menambahkan API Key. Sistem membutuhkan setidaknya 1 API Key ${providerName} aktif di Pengaturan.` : `You have not added an API Key. The system requires at least 1 active ${providerName} API Key in Settings.`,
         type: 'error'
       });
       return;
@@ -973,8 +1008,8 @@ function AppContent() {
         selectedLanguage,
         mediaType === 'Settings' ? 'Gambar' : mediaType,
         selectedPlatforms,
-        apiKeys.filter(k => k.enabled).map(k => k.key),
-        selectedModel
+        keysToUse.filter(k => k.enabled).map(k => k.key),
+        currentModel
       );
       
       setFileItems(prev => 
@@ -993,27 +1028,31 @@ function AppContent() {
   };
 
   const exportKeys = () => {
-    if (apiKeys.length === 0) {
+    const activeKeys = apiProviderTab === 'Gemini' ? apiKeys : groqApiKeys;
+    if (activeKeys.length === 0) {
       showDialog('Empty Vault', 'No API keys found to synchronize.', 'warning');
       return;
     }
-    const keyString = apiKeys.map(k => k.key).join('\n');
+    const keyString = activeKeys.map(k => k.key).join('\n');
     navigator.clipboard.writeText(keyString);
-    showDialog('Integration Sync Success', 'All API keys have been copied to the system buffer (clipboard).', 'success');
+    showDialog('Integration Sync Success', `All ${apiProviderTab} API keys have been copied to the system buffer.`, 'success');
   };
 
   const importBulkKeys = () => {
     const rawKeys = bulkInput.split(/[\n,;]+/).map(k => k.trim()).filter(k => k.length > 10);
     // Deduplicate input and filter out existing
     const uniqueBatch = Array.from(new Set(rawKeys));
-    const newKeysOnly = uniqueBatch.filter(key => !apiKeys.some(k => k.key === key));
+    const activeKeys = apiProviderTab === 'Gemini' ? apiKeys : groqApiKeys;
+    const setActiveKeys = apiProviderTab === 'Gemini' ? setApiKeys : setGroqApiKeys;
+
+    const newKeysOnly = uniqueBatch.filter(key => !activeKeys.some(k => k.key === key));
     
     if (newKeysOnly.length > 0) {
       const processedKeys = newKeysOnly.map(key => ({ key, enabled: true }));
-      setApiKeys(prev => [...prev, ...processedKeys]);
+      setActiveKeys(prev => [...prev, ...processedKeys]);
       setBulkInput('');
       setShowBulkImport(false);
-      showDialog('Bulk Deploy Success', `${newKeysOnly.length} new API keys have been integrated into the cluster.`, 'success');
+      showDialog('Bulk Deploy Success', `${newKeysOnly.length} new ${apiProviderTab} API keys have been integrated.`, 'success');
     } else {
       showDialog('Deployment Halted', 'No unique or valid API keys were detected in the input stream.', 'warning');
     }
@@ -1519,6 +1558,9 @@ function AppContent() {
       return renderPromptGeneratorContent();
     }
     if (mediaType === 'Settings') {
+      const activeApiKeys = apiProviderTab === 'Gemini' ? apiKeys : groqApiKeys;
+      const setActiveApiKeys = apiProviderTab === 'Gemini' ? setApiKeys : setGroqApiKeys;
+
       return (
         <section className="col-span-full bg-surface/40 backdrop-blur-3xl rounded-[3rem] p-12 border-2 border-border/40 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent to-transparent opacity-30"></div>
@@ -1537,13 +1579,33 @@ function AppContent() {
           </div>
 
           <div className="space-y-12 max-w-4xl">
+            {/* API Provider Tab */}
+            <div className="flex bg-subtle/50 p-1 rounded-2xl border border-border w-fit shadow-inner mb-6">
+              <button
+                onClick={() => setApiProviderTab('Gemini')}
+                className={`px-6 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${
+                  apiProviderTab === 'Gemini' ? 'bg-accent text-white shadow-md' : 'text-text-secondary hover:text-accent'
+                }`}
+              >
+                Gemini
+              </button>
+              <button
+                onClick={() => setApiProviderTab('Groq')}
+                className={`px-6 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${
+                  apiProviderTab === 'Groq' ? 'bg-accent text-white shadow-md' : 'text-text-secondary hover:text-accent'
+                }`}
+              >
+                Groq
+              </button>
+            </div>
+
             {/* API Key Collection */}
             <div className="space-y-8 transition-all duration-500">
               <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 border-b border-border/50 pb-6">
                 <div className="space-y-1">
                   <h3 className="text-sm font-black text-text-primary uppercase tracking-[0.2em] flex items-center gap-3">
                     <Cpu className="w-4 h-4 text-accent" />
-                    API Key Pool ({apiKeys.filter(k => k.enabled).length}/{apiKeys.length} Active)
+                    API Key Pool ({activeApiKeys.filter(k => k.enabled).length}/{activeApiKeys.length} Active)
                   </h3>
                   <p className="text-xs text-text-secondary font-medium italic">
                     Hardware-level rotation system prevents rate-limit intersection.
@@ -1555,9 +1617,9 @@ function AppContent() {
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => {
-                        if (apiKeys.length > 0 && window.confirm('Are you sure you want to purge all API keys?')) {
-                            setApiKeys([]);
-                            showDialog('Vault Purged', 'All API keys have been removed from the neural pool.', 'info');
+                        if (activeApiKeys.length > 0 && window.confirm(`Are you sure you want to purge all ${apiProviderTab} API keys?`)) {
+                            setActiveApiKeys([]);
+                            showDialog('Vault Purged', `All ${apiProviderTab} API keys have been removed from the neural pool.`, 'info');
                         }
                     }}
                     className="px-4 py-2 bg-red-500/5 hover:bg-red-500/10 border border-red-500/20 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2.5 transition-all shadow-sm text-red-500"
@@ -1620,7 +1682,7 @@ function AppContent() {
                 </motion.div>
               )}
 
-              {apiKeys.length > 0 && (
+              {activeApiKeys.length > 0 && (
                 <div className="space-y-6 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar p-1">
                   <div className="flex items-center gap-3 px-4">
                     <Cpu className="w-5 h-5 text-accent" />
@@ -1629,7 +1691,7 @@ function AppContent() {
                   </div>
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <AnimatePresence mode="popLayout">
-                      {apiKeys.map((item, index) => (
+                      {activeApiKeys.map((item, index) => (
                         <motion.div 
                           layout
                           initial={{ opacity: 0, scale: 0.95 }}
@@ -1655,7 +1717,7 @@ function AppContent() {
                                  <div className="flex items-center gap-2">
                                    <Layers className={`w-4 h-4 ${item.enabled ? 'text-accent' : 'text-text-secondary'}`} />
                                    <span className="text-[10px] font-black text-text-secondary uppercase tracking-[0.2em] opacity-60">
-                                     Gemini Key ${index + 1}
+                                     {apiProviderTab} Key ${index + 1}
                                    </span>
                                  </div>
                                  {keyStatuses[item.key] && (
@@ -1678,14 +1740,14 @@ function AppContent() {
                                 <RefreshCw className={`w-4 h-4 ${keyStatuses[item.key] === 'TESTING' ? 'animate-spin' : ''}`} />
                               </button>
                               <button 
-                                onClick={() => setApiKeys(prev => prev.map((k) => k.key === item.key ? { ...k, enabled: !k.enabled } : k))}
+                                onClick={() => setActiveApiKeys(prev => prev.map((k) => k.key === item.key ? { ...k, enabled: !k.enabled } : k))}
                                 className={`p-3 rounded-2xl transition-all active:scale-90 ${item.enabled ? 'text-accent bg-accent/10 border border-accent/20' : 'text-text-secondary bg-subtle border border-border'}`}
                                 title={item.enabled ? 'Deactivate Key' : 'Activate Key'}
                               >
                                 <Play className={`w-4 h-4 ${item.enabled ? 'fill-current' : ''}`} />
                               </button>
                               <button 
-                                onClick={() => setApiKeys(prev => prev.filter((k) => k.key !== item.key))}
+                                onClick={() => setActiveApiKeys(prev => prev.filter((k) => k.key !== item.key))}
                                 className="p-3 text-red-500/40 hover:text-red-500 hover:bg-red-500/5 rounded-2xl transition-all active:scale-90"
                                 title="Remove Key"
                               >
@@ -1720,7 +1782,7 @@ function AppContent() {
                 const value = input.value.trim();
                 if (!value) return;
                 
-                if (apiKeys.some(k => k.key === value)) {
+                if (activeApiKeys.some(k => k.key === value)) {
                   showDialog('Duplicate Detected', 'This API key is already integrated in your pool.', 'warning');
                   return;
                 }
@@ -1731,7 +1793,7 @@ function AppContent() {
                   return;
                 }
                 
-                setApiKeys(prev => [...prev, { key: value, enabled: true }]);
+                setActiveApiKeys(prev => [...prev, { key: value, enabled: true }]);
                 showDialog('Key Integrated', 'New API key has been added and enabled.', 'success');
                 input.value = '';
               }} className="relative group">
@@ -1741,7 +1803,7 @@ function AppContent() {
                 <input
                   name="newKey"
                   type="password"
-                  placeholder="Deploy Gemini key (AIza...)"
+                  placeholder={apiProviderTab === 'Gemini' ? "Deploy Gemini key (AIza...)" : "Deploy Groq key (gsk_...)"}
                   className="w-full bg-subtle/20 border-2 border-border group-focus-within:border-accent group-focus-within:bg-surface rounded-3xl pl-14 pr-44 py-5 text-sm font-black focus:outline-none transition-all shadow-inner"
                 />
                 <div className="absolute inset-y-2 right-2 flex items-center">
@@ -1756,33 +1818,57 @@ function AppContent() {
             <div className="space-y-6 pt-12 border-t border-border/50">
               <div className="flex items-center gap-3">
                 <Cpu className="w-5 h-5 text-accent" />
-                <h3 className="text-sm font-black text-text-primary uppercase tracking-[0.2em]">Model Selection</h3>
+                <h3 className="text-sm font-black text-text-primary uppercase tracking-[0.2em]">Model Selection ({apiProviderTab})</h3>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {[
-                  { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', sub: 'Balanced', desc: 'Fast and efficient model for metadata engineering.' },
-                  { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', sub: 'High reasoning', desc: 'Powerful model for deep semantic understanding of assets.' },
-                  { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro', sub: 'Advanced', desc: 'Advanced reasoning model for complex tasks.' },
-                  { id: 'gemini-2.0-flash-thinking', label: 'Gemini 2.0 Flash Thinking', sub: 'Expert', desc: 'Expert model for complex reasoning and analysis.' },
-                  { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', sub: 'Latest', desc: 'The latest Gemini model with state-of-the-art performance.' },
-                  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite', sub: 'Fastest', desc: 'Lightweight model for maximum speed.' },
-                  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', sub: 'Powerful', desc: 'Powerful model for high-end reasoning.' }
-                ].map((model) => (
-                  <button
-                    key={model.id}
-                    onClick={() => setSelectedModel(model.id)}
-                    className={`text-left p-6 rounded-[2rem] border-2 transition-all duration-300 relative overflow-hidden group ${
-                      selectedModel === model.id 
-                        ? 'bg-accent/5 border-accent shadow-xl shadow-accent/5 ring-4 ring-accent/5' 
-                        : 'bg-surface border-border hover:border-accent/40 grayscale opacity-60'
-                    }`}
-                  >
-                    {selectedModel === model.id && <div className="absolute top-0 right-0 w-8 h-8 bg-accent flex items-center justify-center rounded-bl-xl text-white"><Sparkles className="w-4 h-4" /></div>}
-                    <p className={`text-[9px] font-black uppercase tracking-[0.3em] mb-1 ${selectedModel === model.id ? 'text-accent' : 'text-text-secondary'}`}>{model.sub}</p>
-                    <h4 className="text-xl font-black text-text-primary tracking-tighter uppercase mb-4 italic">{model.label}</h4>
-                    <p className="text-[11px] font-medium text-text-secondary leading-relaxed opacity-80">{model.desc}</p>
-                  </button>
-                ))}
+                {apiProviderTab === 'Gemini' ? (
+                  [
+                    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', sub: 'Balanced', desc: 'Fast and efficient model for metadata engineering.' },
+                    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', sub: 'High reasoning', desc: 'Powerful model for deep semantic understanding of assets.' },
+                    { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro', sub: 'Advanced', desc: 'Advanced reasoning model for complex tasks.' },
+                    { id: 'gemini-2.0-flash-thinking', label: 'Gemini 2.0 Flash Thinking', sub: 'Expert', desc: 'Expert model for complex reasoning and analysis.' },
+                    { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', sub: 'Latest', desc: 'The latest Gemini model with state-of-the-art performance.' },
+                    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite', sub: 'Fastest', desc: 'Lightweight model for maximum speed.' },
+                    { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', sub: 'Powerful', desc: 'Powerful model for high-end reasoning.' }
+                  ].map((model) => (
+                    <button
+                      key={model.id}
+                      onClick={() => setSelectedModel(model.id)}
+                      className={`text-left p-6 rounded-[2rem] border-2 transition-all duration-300 relative overflow-hidden group ${
+                        selectedModel === model.id 
+                          ? 'bg-accent/5 border-accent shadow-xl shadow-accent/5 ring-4 ring-accent/5' 
+                          : 'bg-surface border-border hover:border-accent/40 grayscale opacity-60'
+                      }`}
+                    >
+                      {selectedModel === model.id && <div className="absolute top-0 right-0 w-8 h-8 bg-accent flex items-center justify-center rounded-bl-xl text-white"><Sparkles className="w-4 h-4" /></div>}
+                      <p className={`text-[9px] font-black uppercase tracking-[0.3em] mb-1 ${selectedModel === model.id ? 'text-accent' : 'text-text-secondary'}`}>{model.sub}</p>
+                      <h4 className="text-xl font-black text-text-primary tracking-tighter uppercase mb-4 italic">{model.label}</h4>
+                      <p className="text-[11px] font-medium text-text-secondary leading-relaxed opacity-80">{model.desc}</p>
+                    </button>
+                  ))
+                ) : (
+                  [
+                    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'LLama 4 Scout 17B', sub: 'New', desc: 'Powerful multimodal model for rapid reasoning on Groq.' },
+                    { id: 'llama-3.3-70b-versatile', label: 'LLama 3.3 70B', sub: 'Stable', desc: 'Powerful model for rapid reasoning on Groq.' },
+                    { id: 'llama3-70b-8192', label: 'LLama 3 70B', sub: 'High reasoning', desc: 'Heavy weight reasoning and accuracy.' },
+                    { id: 'llama3-8b-8192', label: 'LLama 3 8B', sub: 'Fastest', desc: 'Lightweight and exceptionally fast model.' }
+                  ].map((model) => (
+                    <button
+                      key={model.id}
+                      onClick={() => setSelectedGroqModel(model.id)}
+                      className={`text-left p-6 rounded-[2rem] border-2 transition-all duration-300 relative overflow-hidden group ${
+                        selectedGroqModel === model.id 
+                          ? 'bg-accent/5 border-accent shadow-xl shadow-accent/5 ring-4 ring-accent/5' 
+                          : 'bg-surface border-border hover:border-accent/40 grayscale opacity-60'
+                      }`}
+                    >
+                      {selectedGroqModel === model.id && <div className="absolute top-0 right-0 w-8 h-8 bg-accent flex items-center justify-center rounded-bl-xl text-white"><Sparkles className="w-4 h-4" /></div>}
+                      <p className={`text-[9px] font-black uppercase tracking-[0.3em] mb-1 ${selectedGroqModel === model.id ? 'text-accent' : 'text-text-secondary'}`}>{model.sub}</p>
+                      <h4 className="text-xl font-black text-text-primary tracking-tighter uppercase mb-4 italic">{model.label}</h4>
+                      <p className="text-[11px] font-medium text-text-secondary leading-relaxed opacity-80">{model.desc}</p>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
 
