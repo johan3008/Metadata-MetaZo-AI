@@ -230,18 +230,50 @@ export async function generateStockMetadata(
 - Keywords: Scalable, Editable, Vector, Design element.`;
   }
 
-  const basePrompt = `You are a Senior Microstock SEO Specialist. Generate metadata for the following platforms: ${platforms.join(', ')}.
-  - Title: Exactly ${titleCount} chars (Single line only).
-  - Description: Exactly ${descCount} chars (Single line only, no literal newlines).
-  - Keywords: Exactly ${numberOfKeywords} single-word keywords.
-  - Categories: Array of objects with format { "platform": string, "category": string }. Ensure "platform" matches one of these: ${platforms.join(', ')}. Use official content categories for each platform.
-  - Language: ${language}.
-  - SEO Insights: Array of objects with format { "label": string, "value": string, "impact": string }. Provide actionable insights with impact level.
+  const basePrompt = `You are a world-class Microstock SEO Expert and Data Scientist. Your goal is to generate metadata that achieves FIRST-PAGE RANKING on major microstock platforms (Adobe Stock, Shutterstock, iStock).
+
+  Follow these absolute rules for maximum conversion and search visibility:
+
+  1. TITLE STRATEGY:
+     - Create highly relevant, keyword-rich titles that describe the subject, action, context, and mood.
+     - Avoid fluff. Use industry-standard terms.
+     - EXACTLY ${titleCount} characters. Single line ONLY.
+
+  2. DESCRIPTION STRATEGY:
+     - Expand on the title, adding contextual details, potential use-cases, and atmosphere.
+     - Use natural language but keep it SEO-focused.
+     - EXACTLY ${descCount} characters. Single line ONLY.
+
+  3. KEYWORD STRATEGY (CRITICAL):
+     - Generate exactly ${numberOfKeywords} keywords.
+     - PRIORITIZE: Order by search volume and relevance. Use high-traffic, specific terms.
+     - Avoid generic filler. Use specific descriptors appropriate for 2026 search trends.
+     - Every keyword MUST be high-value. If search volume for a term is low, do not include it.
+
+  4. CATEGORIES:
+     - Use official platform taxonomic categories for these platforms: ${platforms.join(', ')}. 
+     - Format: [{ "platform": "...", "category": "..." }].
+
+  5. SEO INSIGHTS & SCORING:
+     - Evaluate the potential impact on search engine performance.
+     - Impact levels: "High", "Medium", "Low".
+
   ${typeSpecificLogic}
   
-  Calculate seoScore (0-100).
-  IMPORTANT: Return ONLY valid JSON. No conversational text, no markdown framing, no extra explanation. Just the raw JSON object.
-  Format: { "title": "...", "description": "...", "categories": [{ "platform": "...", "category": "..." }], "keywords": [{ "term": "...", "seoTier": "..." }], "marketInsight": "...", "seoScore": 0, "seoInsights": [{ "label": "...", "value": "...", "impact": "..." }] }`;
+  LANGUAGE: ${language}.
+
+  IMPORTANT: Return ONLY valid JSON for the structure below. NO conversational filler, no markdown, no explanation. Just the JSON.
+
+  Format:
+  {
+    "title": "...",
+    "description": "...",
+    "categories": [{ "platform": "...", "category": "..." }],
+    "keywords": [{ "term": "...", "seoTier": "..." }],
+    "marketInsight": "...",
+    "seoScore": 0,
+    "seoInsights": [{ "label": "...", "value": "...", "impact": "..." }]
+  }`;
 
   const repairJson = (text: string): string => {
     // 1. Clean
