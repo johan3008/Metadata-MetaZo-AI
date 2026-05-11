@@ -279,6 +279,7 @@ export async function generateAIImage(
   throw new Error("Pembangkitan gambar AI (Text-to-Image) dinonaktifkan karena fitur ini memerlukan Gemini API Key. Aktifkan kembali di masa mendatang.");
 }
 
+let globalCombinationIndex = 0;
 let globalGeminiKeyIndex = 0;
 let globalKeyRotationIndex = 0;
 
@@ -304,12 +305,20 @@ export async function generateStockMetadata(
   // Track key rotation using module-level variable
   let currentKeyIndex = globalGeminiKeyIndex;
   const allKeys = [process.env.GEMINI_API_KEY, ...(apiKeys || [])].filter(Boolean) as string[];
+  
+  // Create all combinations of models and keys to try
+  const combinations: { model: string; key: string }[] = [];
+  for (const model of MODEL_FALLBACK_CHAIN) {
+    for (const key of allKeys) {
+      combinations.push({ model, key });
+    }
+  }
 
-  // Increase maxRetries to allow multiple full cycles across keys and models
-  const numModels = MODEL_FALLBACK_CHAIN.length;
-  const numKeysToUse = allKeys.length;
-  const maxRetries = Math.max(numModels * numKeysToUse * 3, 25); 
-
+  // Use global key tracking or 0 if somehow reset
+  let localComboIndex = globalCombinationIndex;
+  
+  const maxRetries = combinations.length * 3;
+  
   const isSupported = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'].includes(mimeType);
   // Pre-analysis: Get description if visual data exists
   let visualContext = "";
@@ -320,23 +329,8 @@ export async function generateStockMetadata(
       console.warn("Visual analysis failed, falling back to contextual Info", e);
     }
   }
-
-  const getProviderToUse = () => {
-    const userKeys = (apiKeys || []).map(k => typeof k === 'string' ? k : (k as any).key);
-    const groqKeys = userKeys.filter(k => k.startsWith('gsk_'));
-    
-    if (groqKeys.length > 0) {
-      let model = currentModelName;
-      // If image analysis is needed, ensure we use a vision-capable model
-      if ((isSupported || Array.isArray(base64Data)) && !VISION_MODELS.includes(model) && VISION_MODELS.length > 0) {
-        model = VISION_MODELS[0];
-      }
-      return { type: 'groq' as const, key: groqKeys[globalKeyRotationIndex % groqKeys.length], model };
-    }
-    throw new Error("Analisis metadata memerlukan Groq API key ('gsk_...'). Silakan tambahkan di Pengaturan.");
-  };
-
-  const platformsStr = platforms.length > 0 ? platforms.join(", ") : "Adobe Stock";
+  
+  // platformsStr is unused currently - removing it might be fine, but I will keep it for now.
   
   // Type-specific enhancement strategy
   let typeSpecificLogic = "";
@@ -386,10 +380,12 @@ ASSET TYPE: VECTOR ILLUSTRATION
   
   Format: Valid JSON as defined below.`;
 
-  while (attempt <= 3) {
+  while (attempt <= maxRetries) {
+    const { model: currentModelName, key: currentKey } = combinations[localComboIndex % combinations.length];
+
     try {
       // Use a local client instance to avoid global state race conditions
-      const genAI = new GoogleGenAI({ apiKey: allKeys[currentKeyIndex] });
+      const genAI = new GoogleGenAI({ apiKey: currentKey });
        const jsonSchemaInstruction = `
 Your response MUST be a valid JSON object with the following structure:
 {
@@ -441,32 +437,20 @@ Your response MUST be a valid JSON object with the following structure:
       
       return parsedResult;
     } catch (e: any) {
-      console.error("Failed to generate metadata using Gemini:", e);
+      console.error(`Failed to generate metadata using model ${currentModelName} and key ending in ${currentKey.slice(-4)}:`, e);
       
       if (e.status === 429 || (e.error && e.error.code === 429)) {
-          console.warn(`Quota exhausted for model ${currentModelName} and key ${currentKeyIndex}. Rotating...`);
-          
-          // Rotate key first
-          currentKeyIndex = (currentKeyIndex + 1) % allKeys.length;
-          globalGeminiKeyIndex = currentKeyIndex; // Persist for next calls
-          
-          // Rotate model if we've cycled through all keys for this model
-          if (currentKeyIndex === 0) {
-              const nextModel = getNextModel(currentModelName);
-              if (nextModel) {
-                  console.log(`Rotating to model ${nextModel}`);
-                  currentModelName = nextModel;
-              }
-          }
+          console.warn(`Quota exhausted for model ${currentModelName} and key ending in ${currentKey.slice(-4)}. Rotating...`);
+          localComboIndex++;
+          globalCombinationIndex = localComboIndex;
       }
       
       attempt++;
-      // Re-initialize client with rotated key if needed
-      getGeminiClient(allKeys[currentKeyIndex]);
       
-      await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+      await new Promise((resolve) => setTimeout(resolve, Math.pow(2, Math.min(attempt, 5)) * 1000));
     }
   }
   
-  throw new Error("Failed to generate metadata after multiple retries.");
+  throw new Error("Failed to generate metadata after multiple retries across all available models and keys.");
 }
+

@@ -379,75 +379,42 @@ function AppContent() {
     return () => clearInterval(timer);
   }, []);
 
-  // Firestore Sync - Load (Real-time sync across tabs)
+  // Local Storage Load
   useEffect(() => {
-    // Test connection first
-    async function testConnection() {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error: any) {
-        // If it's just an offline error, don't show the scary Firestore Error dialog
-        if (error?.message?.includes('offline')) {
-          console.warn("Firebase is starting in offline mode, it will sync when online.");
-          return;
-        }
-        console.error("Firebase connection error:", error);
-        handleFirestoreError(error, OperationType.GET, 'test/connection');
+    try {
+      const savedSettings = localStorage.getItem('metazo_settings');
+      if (savedSettings) {
+        const data = JSON.parse(savedSettings);
+        if (data.themeMode !== undefined) setThemeMode(data.themeMode);
+        if (data.metadataLanguage) setSelectedLanguage(data.metadataLanguage);
+        if (data.geminiModel) setSelectedModel(data.geminiModel);
+        if (data.useSystemKey !== undefined) setUseSystemKey(data.useSystemKey);
+        if (data.keywordCount) setKeywordCount(data.keywordCount);
+        if (data.enableUpscaling !== undefined) setEnableUpscaling(data.enableUpscaling);
       }
-    }
-    testConnection();
-
-    if (!user) {
-      setIsInitialLoad(false);
-      return;
+      
+      const savedIntegrations = localStorage.getItem('metazo_integrations');
+      if (savedIntegrations) {
+        setIntegrations(JSON.parse(savedIntegrations));
+      }
+      
+      const savedApiKeys = localStorage.getItem('metazo_apikeys');
+      if (savedApiKeys) {
+        setApiKeys(JSON.parse(savedApiKeys));
+      }
+      
+      const savedHistory = localStorage.getItem('metazo_history');
+      if (savedHistory) {
+        setHistoryItems(JSON.parse(savedHistory));
+      }
+    } catch (e) {
+      console.error('Failed to parse local storage data', e);
     }
     
-    const docRef = doc(db, 'users', user.uid);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.settings) {
-          if (data.settings.themeMode !== undefined) setThemeMode(prev => prev !== data.settings.themeMode ? data.settings.themeMode : prev);
-          else if (data.settings.isDarkMode !== undefined) setThemeMode(prev => prev !== (data.settings.isDarkMode ? 'dark' : 'light') ? (data.settings.isDarkMode ? 'dark' : 'light') : prev);
-          
-          if (data.settings.metadataLanguage) setSelectedLanguage(prev => prev !== data.settings.metadataLanguage ? data.settings.metadataLanguage : prev);
-          if (data.settings.geminiModel) {
-            let model = data.settings.geminiModel;
-            // Migration for decommissioned models
-            if (model === 'mixtral-8x7b-32768') model = 'llama-3.3-70b-versatile';
-            if (model === 'llama3-8b-8192') model = 'llama-3.1-8b-instant';
-            setSelectedModel(prev => prev !== model ? model : prev);
-          }
-          if (data.settings.useSystemKey !== undefined) setUseSystemKey(prev => prev !== data.settings.useSystemKey ? data.settings.useSystemKey : prev);
-          if (data.settings.keywordCount) setKeywordCount(prev => prev !== data.settings.keywordCount ? data.settings.keywordCount : prev);
-          if (data.settings.enableUpscaling !== undefined) setEnableUpscaling(prev => prev !== data.settings.enableUpscaling ? data.settings.enableUpscaling : prev);
-        }
-        
-        setIntegrations(prev => JSON.stringify(prev) !== JSON.stringify(data.integrations) ? (data.integrations || prev) : prev);
-        setApiKeys(prev => JSON.stringify(prev) !== JSON.stringify(data.apiKeys) ? (data.apiKeys || []) : prev);
-        setHistoryItems(prev => JSON.stringify(prev) !== JSON.stringify(data.history) ? (data.history || []) : prev);
-      } else {
-        // NEW USER DETECTED: Features and API Keys are fresh/reset
-        console.log("New user detected: Starting with clean slate.");
-        setApiKeys((prev) => prev.length !== 0 ? [] : prev);
-        setHistoryItems((prev) => prev.length !== 0 ? [] : prev);
-        setIntegrations((prev) => prev.adobe.apiKey !== '' ? {
-          adobe: { apiKey: '', secret: '' },
-          shutterstock: { token: '' }
-        } : prev);
-      }
-      setIsInitialLoad(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-      setIsInitialLoad(false);
-      // Ensure we immediately stop listening to prevent further backend overload backoff attempts
-      if (isQuotaExceededGlobal) {
-        unsubscribe();
-      }
-    });
+    setIsInitialLoad(false);
+  }, []);
 
-    return () => unsubscribe();
-  }, [user]);
+  // Removed exportToCSV implementation here to keep it concise, let's keep exportToCSV but just change the other stuff
 
   const exportToCSV = () => {
     if (historyItems.length === 0) return;
@@ -480,65 +447,48 @@ function AppContent() {
 
   // Save to History Helper
   const saveToHistory = async (newItem: any) => {
-    if (!user || isQuotaExceededGlobal) return;
     try {
-      const docRef = doc(db, 'users', user.uid);
-      const updatedHistory = JSON.parse(JSON.stringify([newItem, ...historyItems])).slice(0, 50); // Keep last 50 and remove undefineds
+      const updatedHistory = JSON.parse(JSON.stringify([newItem, ...historyItems])).slice(0, 50); // Keep last 50
       setHistoryItems(updatedHistory);
-      await setDoc(docRef, { 
-        history: updatedHistory,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+      localStorage.setItem('metazo_history', JSON.stringify(updatedHistory));
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/history`);
+      console.error(err);
     }
   };
 
   const deleteHistoryItem = async (id: string) => {
-    if (!user || isQuotaExceededGlobal) return;
     try {
       const updatedHistory = historyItems.filter(item => item.id !== id);
       setHistoryItems(updatedHistory);
-      const docRef = doc(db, 'users', user.uid);
-      await setDoc(docRef, { 
-        history: updatedHistory,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+      localStorage.setItem('metazo_history', JSON.stringify(updatedHistory));
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/history`);
+      console.error(err);
     }
   };
 
-
-  // Firestore Sync - Save
+  // Local Storage Sync - Save Settings
   useEffect(() => {
-    if (isInitialLoad || !user || isQuotaExceededGlobal) return;
+    if (isInitialLoad) return;
 
-    const timer = setTimeout(async () => {
-      // Re-check before executing timeout action
-      if (isQuotaExceededGlobal) return;
+    const timer = setTimeout(() => {
       try {
-        const docRef = doc(db, 'users', user.uid);
-        await setDoc(docRef, {
-          settings: {
-            themeMode,
-            metadataLanguage: selectedLanguage,
-            geminiModel: selectedModel,
-            useSystemKey,
-            keywordCount,
-            enableUpscaling
-          },
-          integrations,
-          apiKeys,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+        localStorage.setItem('metazo_settings', JSON.stringify({
+          themeMode,
+          metadataLanguage: selectedLanguage,
+          geminiModel: selectedModel,
+          useSystemKey,
+          keywordCount,
+          enableUpscaling
+        }));
+        localStorage.setItem('metazo_integrations', JSON.stringify(integrations));
+        localStorage.setItem('metazo_apikeys', JSON.stringify(apiKeys));
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
+        console.error(err);
       }
     }, 1000); // Debounce saves
 
     return () => clearTimeout(timer);
-  }, [themeMode, selectedLanguage, selectedModel, useSystemKey, keywordCount, enableUpscaling, integrations, apiKeys, user, isInitialLoad]);
+  }, [themeMode, selectedLanguage, selectedModel, useSystemKey, keywordCount, enableUpscaling, integrations, apiKeys, isInitialLoad]);
 
   // Handle Theme Application
   useEffect(() => {
@@ -1968,16 +1918,7 @@ function AppContent() {
                     onClick={async () => {
                       if (window.confirm('Apakah Anda yakin ingin menghapus semua riwayat analisis?')) {
                          setHistoryItems([]);
-                         if (isQuotaExceededGlobal) return;
-                         const docRef = doc(db, 'users', user.uid);
-                         try {
-                           await setDoc(docRef, { 
-                             history: [],
-                             updatedAt: serverTimestamp()
-                           }, { merge: true });
-                         } catch (err) {
-                           handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/history`);
-                         }
+                         localStorage.setItem('metazo_history', '[]');
                       }
                     }}
                     className="text-red-500 hover:bg-red-50 px-4 py-2 rounded-xl text-xs font-[800] flex items-center gap-2 transition-all border border-red-100 uppercase tracking-widest"
