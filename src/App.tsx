@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Image as ImageIcon, FileVideo, Layers, UploadCloud, Trash2, Copy, Download, RefreshCw, Sun, Moon, Key, Play, LogOut, Clock, Heart, PenTool, Video, Zap, Info, Cpu, CheckCircle2, Maximize, Palette, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Sparkles, Image as ImageIcon, FileVideo, Layers, UploadCloud, Trash2, Copy, Download, RefreshCw, Sun, Moon, Key, Play, Clock, Heart, PenTool, Video, Zap, Info, Cpu, CheckCircle2, Maximize, Palette, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { generateStockMetadata, GeneratedMetadata, generateAIPrompts, generateSuggestedThemes } from './services/geminiService';
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, EmailAuthProvider, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signOut } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp, getDocFromServer, onSnapshot, disableNetwork } from 'firebase/firestore';
-import { AuthProvider, useAuth } from './components/AuthProvider';
-import { Login } from './components/Login';
 import { auth as firebaseAuth, db } from './lib/firebase';
 
 enum OperationType {
@@ -223,7 +221,7 @@ const DialogModal = ({
 };
 
 function AppContent() {
-  const { user } = useAuth();
+  const user = { uid: 'guest-operator' };
   
   const [mediaType, setMediaType] = useState<MediaType>('Gambar');
   const [theme, setTheme] = useState('');
@@ -681,33 +679,10 @@ function AppContent() {
 
   const [draggedItemIndex, setDraggedItemIndex] = useState<{fileId: string, index: number} | null>(null);
 
-  // Inactivity Logout
-  useEffect(() => {
-    if (!user) return;
-
-    let timeout: NodeJS.Timeout;
-
-    const resetTimer = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        signOut(firebaseAuth).catch(console.error);
-      }, 30 * 60 * 1000); // 30 minutes
-    };
-
-    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
-    events.forEach(event => window.addEventListener(event, resetTimer));
-    
-    resetTimer(); // Initialize
-
-    return () => {
-      clearTimeout(timeout);
-      events.forEach(event => window.removeEventListener(event, resetTimer));
-    };
-  }, [user]);
-
-  if (!user) {
+  /* Inactivity Logout removed since Login is disabled */
+  /* if (!user) {
     return <Login />;
-  }
+  } */
 
   const recalculateTiers = (keywords: any[]) => {
     return keywords.map((k, i) => ({
@@ -2504,14 +2479,6 @@ function AppContent() {
               ID
             </button>
           </div>
-          <motion.button 
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => signOut(firebaseAuth)}
-            className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 hover:bg-red-500 hover:text-white transition-all shadow-sm"
-          >
-            <LogOut className="w-5 h-5" />
-          </motion.button>
         </div>
       </header>
 
@@ -3088,15 +3055,8 @@ function AppContent() {
   );
 }
 
-function MainContent() {
-  const { user } = useAuth();
-  return <AppContent key={user?.uid || 'auth-gate'} />;
-}
-
 export default function App() {
   return (
-    <AuthProvider>
-      <MainContent />
-    </AuthProvider>
+    <AppContent />
   );
 }
