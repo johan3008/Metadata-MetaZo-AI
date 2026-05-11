@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "User Account",
+      "description": "Stores user preferences and encrypted API keys",
+      "type": "object",
+      "properties": {
+        "settings": {
+          "type": "object",
+          "properties": {
+            "isDarkMode": { "type": "boolean" },
+            "metadataLanguage": { "type": "string" },
+            "geminiModel": { "type": "string" },
+            "useSystemKey": { "type": "boolean" },
+            "keywordCount": { "type": "number" },
+            "enableUpscaling": { "type": "boolean" }
+          }
+        },
+        "integrations": {
+          "type": "object",
+          "properties": {
+            "adobe": {
+              "type": "object",
+              "properties": {
+                "apiKey": { "type": "string" },
+                "secret": { "type": "string" }
+              }
+            },
+            "shutterstock": {
+              "type": "object",
+              "properties": {
+                "token": { "type": "string" }
+              }
+            }
+          }
+        },
+        "apiKeys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Historical metadata analysis results"
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Private user profile and data"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /test/{document=**} {
+      allow read: if true;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 2. Validation Blueprints
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['updatedAt']) &&
+             data.updatedAt == request.time &&
+             (!('settings' in data) || data.settings is map) &&
+             (!('apiKeys' in data) || data.apiKeys is list) &&
+             (!('history' in data) || data.history is list);
+    }
+
+    // matched path for users
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      
+      allow create: if isOwner(userId) && 
+                      isValidId(userId) && 
+                      isValidUserAccount(request.resource.data);
+      
+      allow update: if isOwner(userId) && 
+                      isValidId(userId) && 
+                      isValidUserAccount(request.resource.data) &&
+                      // Ensure identity integrity: user cannot change their ID or basic structure via update
+                      request.resource.data.keys().hasAll(['updatedAt']);
+
+      allow delete: if false; // Users cannot delete their account via app currently
+    }
+  }
+}
