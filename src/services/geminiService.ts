@@ -1,9 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
 const MODEL_FALLBACK_CHAIN = [
-  "gemini-3-flash-preview",
-  "gemini-3.1-flash-lite",
-  "gemini-3.1-pro-preview"
+  "gemini-3.1-flash-lite"
 ];
 
 let globalCombinationIndex = 0;
@@ -232,65 +230,155 @@ export async function generateStockMetadata(
 - Keywords: Scalable, Editable, Vector, Design element.`;
   }
 
-  const basePrompt = `You are a Senior Microstock SEO Specialist. Generate metadata:
-  - Title: Exactly ${titleCount} chars.
-  - Description: Exactly ${descCount} chars.
+  const basePrompt = `You are a Senior Microstock SEO Specialist. Generate metadata for the following platforms: ${platforms.join(', ')}.
+  - Title: Exactly ${titleCount} chars (Single line only).
+  - Description: Exactly ${descCount} chars (Single line only, no literal newlines).
   - Keywords: Exactly ${numberOfKeywords} single-word keywords.
+  - Categories: Array of objects with format { "platform": string, "category": string }. Ensure "platform" matches one of these: ${platforms.join(', ')}. Use official content categories for each platform.
   - Language: ${language}.
+  - SEO Insights: Array of objects with format { "label": string, "value": string, "impact": string }. Provide actionable insights with impact level.
   ${typeSpecificLogic}
   
-  Calculate seoScore (0-100) and provide 3 actionable seoInsights.
-  Format: Valid JSON with title, description, categories, keywords, marketInsight, seoScore, seoInsights.`;
+  Calculate seoScore (0-100).
+  IMPORTANT: Return ONLY valid JSON. No conversational text, no markdown framing, no extra explanation. Just the raw JSON object.
+  Format: { "title": "...", "description": "...", "categories": [{ "platform": "...", "category": "..." }], "keywords": [{ "term": "...", "seoTier": "..." }], "marketInsight": "...", "seoScore": 0, "seoInsights": [{ "label": "...", "value": "...", "impact": "..." }] }`;
 
-  while (attempt <= maxRetries) {
-    const { model: currentModel, key } = combinations[localComboIndex % combinations.length];
-    try {
-      if (!visualContext && isSupported && !Array.isArray(base64Data)) {
-          const genAI_desc = new GoogleGenAI({ apiKey: key });
-          const descResult = await genAI_desc.models.generateContent({
-            model: currentModel,
-            contents: [{
-              role: 'user',
-              parts: [{ inlineData: { data: base64Data, mimeType: mimeType } }, { text: "Describe what's in this image." }]
-            }]
-          });
-          visualContext = descResult.text || "";
-      }
+  const repairJson = (text: string): string => {
+    // 1. Clean
+    let cleaned = text.trim();
+    if (!cleaned) return "{}";
 
-      const promptWithContext = `${basePrompt}\n\nVisual Context: ${visualContext}\nFileName: ${fileName}\nTheme: ${theme}`;
-      const genAI = new GoogleGenAI({ apiKey: key });
-      
-      const contents: any[] = [];
-      if (isSupported && !Array.isArray(base64Data)) {
-        contents.push({ inlineData: { data: base64Data, mimeType: mimeType } });
-      } else if (Array.isArray(base64Data)) {
-        const frameIndices = [0, Math.floor(base64Data.length / 2), base64Data.length - 1];
-        frameIndices.forEach(idx => contents.push({ inlineData: { data: base64Data[idx], mimeType: 'image/jpeg' } }));
-      }
-      contents.push({ text: promptWithContext });
-
-      const result = await genAI.models.generateContent({
-        model: currentModel,
-        contents: [{ role: 'user', parts: contents }],
-      });
-      
-      const parsed = JSON.parse(extractJson(result.text || "{}")) as GeneratedMetadata;
-      if (parsed.keywords) {
-        parsed.keywords = parsed.keywords.map((kw, i) => ({
-          term: kw.term,
-          seoTier: i < 10 ? "High" : i < 30 ? "Medium" : "Low"
-        }));
-      }
-      return parsed;
-    } catch (e: any) {
-      console.warn(`Rotation attempt ${attempt} failed with ${currentModel}:`, e);
-      if (e.status === 429 || e.status === 403) {
-        localComboIndex++;
-        globalCombinationIndex = localComboIndex;
-      }
-      attempt++;
-      await new Promise(r => setTimeout(r, 1000));
+    // Extract JSON part if mixed with text
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && firstBrace < lastBrace) {
+      cleaned = cleaned.substring(firstBrace, lastBrace + 1);
     }
+
+    // 2. Remove all unescaped newlines
+    cleaned = cleaned.replace(/\\n/g, ' ').replace(/\n/g, ' '); 
+
+    // 3. Attempt direct parse
+    try {
+      return JSON.stringify(JSON.parse(cleaned));
+    } catch (e: any) {
+      console.warn("JSON repair attempt 1 failed:", e.message);
+      
+      // 4. Try adding missing closing quotes for unclosed strings
+      let quoteCount = (cleaned.match(/"/g) || []).length;
+      if (quoteCount % 2 !== 0) {
+        cleaned += '"';
+      }
+      
+      // 5. Try adding missing braces
+      let openBraces = (cleaned.match(/{/g) || []).length;
+      let closeBraces = (cleaned.match(/}/g) || []).length;
+      while (openBraces > closeBraces) {
+        cleaned += '}';
+        closeBraces++;
+      }
+      
+      try {
+        return JSON.stringify(JSON.parse(cleaned));
+      } catch (e2: any) {
+        console.warn("JSON repair attempt 2 failed:", e2.message);
+      }
+    }
+    return "{}"; // Return empty JSON object fallback
+  };
+
+
+    let lastError: any;
+    while (attempt <= maxRetries) {
+      const { model: currentModel, key } = combinations[localComboIndex % combinations.length];
+      try {
+        if (!visualContext && isSupported && !Array.isArray(base64Data)) {
+            const genAI_desc = new GoogleGenAI({ apiKey: key });
+            const descResult = await genAI_desc.models.generateContent({
+              model: currentModel,
+              contents: [{
+                role: 'user',
+                parts: [{ inlineData: { data: base64Data, mimeType: mimeType } }, { text: "Describe what's in this image." }]
+              }]
+            });
+            visualContext = descResult.text || "";
+        }
+  
+        const promptWithContext = `${basePrompt}\n\nVisual Context: ${visualContext}\nFileName: ${fileName}\nTheme: ${theme}`;
+        const genAI = new GoogleGenAI({ apiKey: key });
+        
+        const contents: any[] = [];
+        if (isSupported && !Array.isArray(base64Data)) {
+          contents.push({ inlineData: { data: base64Data, mimeType: mimeType } });
+        } else if (Array.isArray(base64Data)) {
+          const frameIndices = [0, Math.floor(base64Data.length / 2), base64Data.length - 1];
+          frameIndices.forEach(idx => contents.push({ inlineData: { data: base64Data[idx], mimeType: 'image/jpeg' } }));
+        }
+        contents.push({ text: promptWithContext });
+  
+        const result = await genAI.models.generateContent({
+          model: currentModel,
+          contents: [{ role: 'user', parts: contents }],
+          config: {
+            temperature: 0.4,
+            maxOutputTokens: 4096,
+            responseMimeType: "application/json"
+          }
+        });
+        
+        const text = repairJson(extractJson(result.text || "{}"));
+        const parsed = JSON.parse(text) as GeneratedMetadata;
+        
+        // Defensive mapping for keywords
+        if (parsed.keywords) {
+          parsed.keywords = (Array.isArray(parsed.keywords) ? parsed.keywords : []).map((kw: any, i: number) => ({
+            term: typeof kw === 'string' ? kw : (kw.term || ""),
+            seoTier: (typeof kw === 'object' && (kw.seoTier === "High" || kw.seoTier === "Medium" || kw.seoTier === "Low")) ? kw.seoTier : (i < 10 ? "High" : i < 30 ? "Medium" : "Low")
+          }));
+        } else {
+          parsed.keywords = [];
+        }
+
+        // Defensive mapping for categories
+        if (Array.isArray(parsed.categories)) {
+          parsed.categories = parsed.categories.map((cat: any) => {
+            if (typeof cat === 'string') {
+              return { platform: 'General', category: cat };
+            }
+            return {
+              platform: cat.platform || 'General',
+              category: cat.category || (typeof cat === 'object' ? Object.values(cat)[0] : 'Unknown')
+            };
+          });
+        } else {
+          parsed.categories = [];
+        }
+
+        if (!parsed.marketInsight) {
+          parsed.marketInsight = typeof parsed.marketInsight === 'string' ? parsed.marketInsight : "";
+        }
+
+        // Defensive mapping for seoInsights
+        if (Array.isArray(parsed.seoInsights)) {
+          parsed.seoInsights = parsed.seoInsights.map((insight: any) => ({
+            label: insight.label || "N/A",
+            value: insight.value || "N/A",
+            impact: insight.impact || "N/A"
+          }));
+        } else {
+          parsed.seoInsights = [];
+        }
+        return parsed;
+      } catch (e: any) {
+        lastError = e;
+        console.error(`Rotation attempt ${attempt} failed with ${currentModel} on file ${fileName}:`, e);
+        if (e.status === 429 || e.status === 403 || e.message?.includes('429') || e.message?.includes('403')) {
+          localComboIndex++;
+          globalCombinationIndex = localComboIndex;
+        }
+        attempt++;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    throw new Error(`Exhausted all Gemini rotation options for file: ${fileName}. Last error: ${lastError ? JSON.stringify(lastError) : 'Unknown'}`);
   }
-  throw new Error("Exhausted all Gemini rotation options.");
-}

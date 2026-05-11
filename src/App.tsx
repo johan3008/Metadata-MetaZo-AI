@@ -2665,7 +2665,7 @@ function AppContent() {
 
                           {/* Metadata Display (Collapsible for mobile) */}
                           {item.status === 'SUCCESS' && item.result ? (
-                            <div id={`meta-${item.id}`} className="hidden lg:block animate-in fade-in zoom-in-95 duration-300">
+                            <div id={`meta-${item.id}`} className="block animate-in fade-in zoom-in-95 duration-300">
                                 <div className="bg-subtle/30 backdrop-blur-sm p-6 lg:p-8 rounded-[2rem] space-y-8 border border-border/50 relative overflow-hidden shadow-inner">
                               <div className="absolute top-0 right-0 p-4 opacity-[0.03] pointer-events-none">
                                 <Sparkles className="w-24 h-24" />
