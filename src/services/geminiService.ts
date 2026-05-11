@@ -279,29 +279,44 @@ export async function generateStockMetadata(
     }
   };
 
-  const basePrompt = `You are an elite microstock metadata generator specialized for Adobe Stock, Shutterstock, and iStock. Your expertise lies in high-conversion SEO and marketplace search intent.
+  const mediaTypeLogic = mediaType === 'Video' ? `
+VIDEO SPECIFIC RULES:
+- Identify camera techniques (static, handheld, gimbal, slider, drone).
+- Identify camera movement (pan, tilt, zoom, dolly, tracking).
+- Identify lighting style (natural, studio, cinematic, key-light).
+- Describe the speed (slow motion, time-lapse, real-time).
+- Keywords must include technical video terms (4k, high-speed, stabilized).` : mediaType === 'Vektor' ? `
+VECTOR SPECIFIC RULES:
+- Identify illustration style (flat, isometric, line art, 3D render).
+- Focus on technical scalability and design purpose.
+- Keywords must include terms like "scalable", "editable", "minimalist", or "infographic".` : `
+DIGITAL PHOTO SPECIFIC RULES:
+- Focus on technical fidelity, texture, and sensory atmosphere.
+- Identify lighting (golden hour, studio, softbox, cinematic).`;
+
+  const basePrompt = `You are an elite microstock metadata generator specialized for Adobe Stock, Shutterstock, and iStock. Your expertise lies in high-conversion SEO and marketplace search intent for 2026.
 
 SOURCE INTERNAL VISUAL AUDIT:
 {VISUAL_CONTEXT}
 
 PLATFORM TARGETS: ${platforms.join(', ')}
-MEDIA TYPE: ${mediaType}
+MEDIA NATURE: ${mediaType}${mediaTypeLogic}
 
-ABSOLUTE MANDATORY RULES:
-1. NO HALLUCINATION: Only describe what is strictly visible. Do not invent context or hidden objects.
-2. TITLE (STRICT LENGTH): Engineering a descriptive title. It MUST be EXACTLY ${titleCount} characters long. If the title is too short, expand it with more specific visual details or technical descriptors until it reaches the precise target of ${titleCount} characters. DO NOT return less or more.
-3. DESCRIPTION (STRICT LENGTH): Create one professional SEO-friendly sentence. It MUST be EXACTLY ${descCount} characters long. Expand with atmosphere or setting details to hit the count.
-4. KEYWORD HIERARCHY (EXACTLY ${numberOfKeywords} UNIQUE ITEMS):
+ABSOLUTE MANDATORY RULES (MICROSTOCK COMPLIANCE & IP PROTECTION):
+1. IP & TRADEMARK GUARD: STRICTLY FORBIDDEN to include brand names, trademarks, logos, or copyrighted terms (e.g., NO "iPhone", "Nike", "Sony", "Starbucks"). Use generic descriptors (e.g., "smartphone", "athletic shoes", "camera", "coffee shop").
+2. CTR OPTIMIZATION: Put the most important, searchable subject at the VERY BEGINNING of the Title. No fluff/filler.
+3. TITLE (STRICT LENGTH): Engineering a descriptive title. It MUST be EXACTLY ${titleCount} characters long. Expand with high-value technical or descriptive details to hit the count.
+4. DESCRIPTION (STRICT LENGTH): Create one professional SEO-friendly sentence. It MUST be EXACTLY ${descCount} characters long.
+5. KEYWORD HIERARCHY (EXACTLY ${numberOfKeywords} UNIQUE ITEMS):
    - You MUST generate exactly ${numberOfKeywords} single-word keywords.
-   - Priority 1: Main subject (Anchor keywords)
-   - Priority 2: Secondary subjects/objects
-   - Priority 3: Visible actions/verbs
-   - Priority 4: Environment/Location
-   - Priority 5: Colors, lighting, mood, and high-level concepts
-   - REQUIREMENT: Only single words. No phrases.
-5. CATEGORIES: Map exactly ONE official category for each platform in [${platforms.join(', ')}].
-   - For Adobe Stock, pick exactly ONE from: Animals, Architecture, Business, Drinks, Environment, States of Mind, Food, Graphic Resources, Hobbies, Industry, Landscapes, Lifestyle, People, Plants, Culture, Science, Social Issues, Sports, Technology, Transport, Travel.
-6. SEARCH TRENDS: Use keywords commonly used in 2026 microstock markets.
+   - Priority 1: Main subject / Anchor keywords (Highest volume search terms).
+   - Priority 2: Secondary subjects/objects.
+   - Priority 3: Visible actions, verbs, and movement.
+   - Priority 4: Environment, textures, and lighting.
+   - Priority 5: Concepts (e.g., "sustainability", "growth", "innovation").
+6. POLICY COMPLIANCE: No offensive or illegal terms. Ensure metadata is "Commercial-Grade".
+7. CATEGORIES: Map exactly ONE official category for each platform in [${platforms.join(', ')}].
+   - Adobe Stock: Pick exactly ONE from: Animals, Architecture, Business, Drinks, Environment, States of Mind, Food, Graphic Resources, Hobbies, Industry, Landscapes, Lifestyle, People, Plants, Culture, Science, Social Issues, Sports, Technology, Transport, Travel.
 
 JSON OUTPUT STRUCTURE (STRICTLY REQUIRED):
 {
@@ -336,19 +351,29 @@ JSON OUTPUT STRUCTURE (STRICTLY REQUIRED):
             onStatusUpdate(`[${currentProvider}] Generating with ${currentModel}${retryInfo}...`);
           }
 
-          if (!visualContext && isSupported && !Array.isArray(base64Data)) {
+          if (!visualContext && isSupported) {
             const visKey = process.env.GEMINI_API_KEY || (currentProvider === 'Gemini' ? key : null);
             if (visKey) {
               const genAI_desc = new GoogleGenAI({ apiKey: visKey });
+              const parts: any[] = [];
+              
+              if (Array.isArray(base64Data)) {
+                // For video, extract start, middle, and end frames for accurate analysis
+                const frameIndices = [0, Math.floor(base64Data.length / 2), base64Data.length - 1];
+                frameIndices.forEach(idx => {
+                  if (base64Data[idx]) {
+                    parts.push({ inlineData: { data: base64Data[idx], mimeType: 'image/jpeg' } });
+                  }
+                });
+              } else {
+                parts.push({ inlineData: { data: base64Data, mimeType: mimeType } });
+              }
+
+              parts.push({ text: `Analyze these visual assets for high-end microstock SEO. Perform a deep visual audit: 1. Identify the absolute main subject. 2. List secondary objects and elements. 3. Describe the environment/setting. 4. Identify lighting, colors, and commercial mood. 5. Note specific actions or concepts. ${mediaType === 'Video' ? 'Identify camera movement, speed, and cinematic flow.' : ''} Return as a logical internal description for a metadata engineer.` });
+
               const descResult = await genAI_desc.models.generateContent({
                 model: "gemini-2.0-flash",
-                contents: [{
-                  role: 'user',
-                  parts: [
-                    { inlineData: { data: base64Data, mimeType: mimeType } }, 
-                    { text: "Analyze this image for high-end microstock SEO. Perform a deep visual audit: 1. Identify the absolute main subject. 2. List secondary objects and supporting elements. 3. Describe the specific environment/setting. 4. Identify lighting, colors, and commercial mood. 5. Note any specific actions or concepts. Return as a logical internal description for a metadata engineer." }
-                  ]
-                }]
+                contents: [{ role: 'user', parts }]
               });
               visualContext = descResult.text || "";
             }
@@ -358,12 +383,31 @@ JSON OUTPUT STRUCTURE (STRICTLY REQUIRED):
           let textResult = "{}";
 
           if (currentProvider === 'Groq') {
+            const messages: any[] = [];
+            const userContent: any[] = [{ type: "text", text: promptWithContext }];
+            
+            // Add vision content if model supports it (Llama 3.2 vision or Llama 4 scout)
+            if (currentModel.includes('llama')) {
+              if (Array.isArray(base64Data)) {
+                const frameIndices = [0, Math.floor(base64Data.length / 2), base64Data.length - 1];
+                frameIndices.forEach(idx => {
+                  if (base64Data[idx]) {
+                    userContent.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data[idx]}` } });
+                  }
+                });
+              } else if (typeof base64Data === 'string') {
+                userContent.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Data}` } });
+              }
+            }
+
+            messages.push({ role: "user", content: userContent });
+
             const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
               body: JSON.stringify({ 
                 model: currentModel, 
-                messages: [{ role: "user", content: promptWithContext }], 
+                messages, 
                 response_format: { type: "json_object" },
                 temperature: 0.1
               })
