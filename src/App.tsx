@@ -323,7 +323,7 @@ function AppContent() {
     setIsGeneratingThemes(true);
     try {
       const keysStr = keysToUse.filter(k => k.enabled).map(k => k.key);
-      const themes = await generateSuggestedThemes(promptGenType, keysStr, currentModel);
+      const themes = await generateSuggestedThemes(promptGenType, keysStr, currentModel, isGroq ? 'Groq' : 'Gemini');
       setSuggestedThemes(themes);
       setShowThemeSuggestions(true);
     } catch (err: any) {
@@ -370,7 +370,8 @@ function AppContent() {
         keysStr,
         promptTargetAI,
         promptAspectRatio,
-        currentModel
+        currentModel,
+        isGroq ? 'Groq' : 'Gemini'
       );
       setGeneratedPrompts(result);
     } catch (err: any) {
@@ -922,7 +923,8 @@ function AppContent() {
               setFileItems(prev => 
                 prev.map(item => item.id === currentItem.id ? { ...item, statusMessage: msg } : item)
               );
-            }
+            },
+            isGroq ? 'Groq' : 'Gemini'
           );
           
           setFileItems(prev => 
@@ -1023,7 +1025,9 @@ function AppContent() {
         mediaType === 'Settings' ? 'Gambar' : mediaType,
         selectedPlatforms,
         keysToUse.filter(k => k.enabled).map(k => k.key),
-        currentModel
+        currentModel,
+        undefined,
+        isGroq ? 'Groq' : 'Gemini'
       );
       
       setFileItems(prev => 
