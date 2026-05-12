@@ -24,7 +24,7 @@ export interface GeneratedMetadata {
   seoInsights?: { label: string; value: string; impact: string }[];
 }
 
-// ─── Image compression (saves 60-80% tokens) ─────────────────────────────────
+// ─── Image compression ────────────────────────────────────────────────────────
 export async function compressImageBase64(
   base64: string,
   maxDimension = 1024,
@@ -49,62 +49,179 @@ export async function compressImageBase64(
   });
 }
 
-// ─── JSON helpers ─────────────────────────────────────────────────────────────
-function extractJson(text: string): string {
-  if (!text) return "{}";
-  const md = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (md?.[1]) return md[1].trim();
-  const first = text.indexOf("{");
-  if (first === -1) return "{}";
-  let depth = 0, inStr = false, esc = false;
-  for (let i = first; i < text.length; i++) {
-    const c = text[i];
-    if (esc) { esc = false; continue; }
-    if (c === "\\") { esc = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (!inStr) {
-      if (c === "{") depth++;
-      else if (c === "}") { depth--; if (depth === 0) return text.substring(first, i + 1); }
+// ─── Sleep helper ─────────────────────────────────────────────────────────────
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// ─── Parse plain-text response from AI ────────────────────────────────────────
+// The AI now responds in plain text format:
+//   TITLE:
+//   ...
+//   DESCRIPTION:
+//   ...
+//   KEYWORDS:
+//   keyword1, keyword2, ...
+function parsePlainTextMetadata(
+  raw: string,
+  numberOfKeywords: number,
+  titleCount: number,
+  descCount: number,
+  platforms: string[],
+  mediaType: string
+): GeneratedMetadata | null {
+  try {
+    const titleMatch = raw.match(/TITLE:\s*\n?([\s\S]*?)(?=\nDESCRIPTION:|$)/i);
+    const descMatch  = raw.match(/DESCRIPTION:\s*\n?([\s\S]*?)(?=\nKEYWORDS:|$)/i);
+    const kwMatch    = raw.match(/KEYWORDS:\s*\n?([\s\S]*?)$/i);
+
+    const title       = titleMatch?.[1]?.trim() ?? "";
+    const description = descMatch?.[1]?.trim() ?? "";
+    const kwRaw       = kwMatch?.[1]?.trim() ?? "";
+
+    if (!title || !description || !kwRaw) return null;
+
+    // Parse keywords — preserve multi-word phrases (long-tail)
+    const rawKws = kwRaw
+      .split(/,|\n/)
+      .map(k => k.trim().replace(/^[\-\*\d\.\s]+/, "").trim())  // strip bullets/numbers
+      .filter(k => k.length >= 2);
+
+    // Deduplicate (case-insensitive), preserve original casing
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const kw of rawKws) {
+      const key = kw.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); deduped.push(kw); }
+      if (deduped.length >= numberOfKeywords) break;
     }
+
+    const keywords: KeywordInfo[] = deduped.map((term, i) => ({
+      term,
+      seoTier: (i < 10 ? "High" : i < 30 ? "Medium" : "Low") as "High" | "Medium" | "Low",
+    }));
+
+    // Auto-assign Adobe category based on media type
+    const adobeCategoryMap: Record<string, string> = {
+      Video:   "Technology",
+      Vektor:  "Graphic Resources",
+      Gambar:  "Lifestyle",
+    };
+    const categories = platforms.map(p => ({
+      platform: p,
+      category: p === "Adobe Stock"
+        ? (adobeCategoryMap[mediaType] ?? "Lifestyle")
+        : "General",
+    }));
+
+    return {
+      title: title.substring(0, titleCount),
+      description: description.substring(0, descCount),
+      categories,
+      keywords,
+      suggestedKeywords: [],
+      marketInsight: "",
+      seoScore: 85,
+      seoInsights: [],
+    };
+  } catch (e) {
+    console.warn("parsePlainTextMetadata failed:", e);
+    return null;
   }
-  return text.substring(first) || "{}";
 }
 
-function repairJson(text: string): string {
-  let s = text.trim();
-  if (!s) return "{}";
-  const f = s.indexOf("{"), l = s.lastIndexOf("}");
-  if (f !== -1 && l !== -1 && f < l) s = s.substring(f, l + 1);
-  s = s.replace(/\\n/g, " ").replace(/\n/g, " ");
-  try { return JSON.stringify(JSON.parse(s)); } catch (_) {}
-  // Best-effort repairs
-  if ((s.match(/"/g) || []).length % 2 !== 0) s += '"';
-  let opens = (s.match(/{/g) || []).length;
-  let closes = (s.match(/}/g) || []).length;
-  while (opens > closes) { s += "}"; closes++; }
-  try { return JSON.stringify(JSON.parse(s)); } catch (_) { return "{}"; }
-}
+// ─── Build the metadata prompt (plain-text output format) ─────────────────────
+function buildMetadataPrompt(opts: {
+  mediaType: string;
+  fileName: string;
+  theme: string;
+  platforms: string[];
+  language: string;
+  titleCount: number;
+  descCount: number;
+  numberOfKeywords: number;
+  isVideo: boolean;
+}): string {
+  const videoNote = opts.isVideo
+    ? `\nMEDIA TYPE: Video — 3 frames are provided: START, MIDDLE, and END of the video. Analyze the full visual arc.`
+    : `\nMEDIA TYPE: ${opts.mediaType}`;
 
-// ─── Keyword cleaner ──────────────────────────────────────────────────────────
-const STOPWORDS = new Set(["a","an","the","and","or","but","if","then","else","when","at","from","by","for","with","in","on","to","of","is","it","its","my","your","their","our","this","that","are","was","were","has","have","had","be","been","being","do","does","did","will","would","could","should","may","might","shall","must","can"]);
+  const themeNote = opts.theme ? `\nADDITIONAL CONTEXT FROM USER: "${opts.theme}"` : "";
 
-function cleanKeywords(keywords: string[], limit: number): string[] {
-  return [...new Set(
-    keywords
-      .map(k => k.trim().toLowerCase().replace(/[^a-z0-9\-]/g, ""))
-      .filter(k => k.length >= 2 && !STOPWORDS.has(k))
-  )].slice(0, limit);
+  return `You are a professional microstock metadata generator.
+Your task is to analyze the uploaded ${opts.isVideo ? "video frames" : "image"} carefully and generate highly accurate stock metadata.${videoNote}${themeNote}
+TARGET PLATFORMS: ${opts.platforms.join(", ")}
+OUTPUT LANGUAGE: ${opts.language}
+
+STRICT RULES:
+1. NEVER hallucinate.
+   - Only describe objects, actions, colors, emotions, locations, and concepts that are clearly visible.
+   - Do not invent brands, places, ethnicity, professions, or events unless visually obvious.
+2. Metadata must match the actual visual content exactly.
+   - The title, description, and keywords must directly reflect the media.
+   - Avoid generic filler text.
+3. Prioritize SEO for microstock marketplaces.
+   - Use strong buyer search terms.
+   - Use commercially relevant wording.
+   - Use natural ${opts.language}.
+4. Generate:
+   - 1 SEO title
+   - 1 accurate description
+   - Exactly ${opts.numberOfKeywords} relevant keywords
+
+5. TITLE RULES:
+   - Between ${Math.max(50, opts.titleCount - 30)} and ${opts.titleCount} characters
+   - Clear and readable
+   - Important keywords at beginning
+   - No keyword stuffing
+   - No symbols like | or #
+
+6. DESCRIPTION RULES:
+   - Between ${Math.max(80, opts.descCount - 50)} and ${opts.descCount} characters
+   - Natural commercial wording
+   - Accurate to media
+   - No fake context
+
+7. KEYWORD RULES:
+   - Exactly ${opts.numberOfKeywords} keywords
+   - Most important keywords first
+   - Single words AND long-tail phrases (2-3 words) are allowed and encouraged
+   - No duplicate keywords
+   - No irrelevant keywords
+   - No spam
+   - Multi-word keywords like "tropical beach" or "business meeting" are VALID
+
+8. Prioritize:
+   - Main subject
+   - Action
+   - Environment
+   - Composition
+   - Mood
+   - Commercial concepts
+   - Color
+   - Camera perspective
+
+9. If media is unclear:
+   - Stay conservative
+   - Use generic accurate terms only
+
+10. Output format EXACTLY (no extra text, no JSON):
+TITLE:
+<your title here>
+DESCRIPTION:
+<your description here>
+KEYWORDS:
+<keyword1>, <keyword2>, <keyword3>, ...all ${opts.numberOfKeywords} keywords on one line separated by commas`;
 }
 
 // ─── Low-level API callers ────────────────────────────────────────────────────
-async function callGemini(key: string, model: string, parts: any[]): Promise<string> {
+async function callGeminiText(key: string, model: string, parts: any[]): Promise<string> {
   const genAI = new GoogleGenAI({ apiKey: key });
   const result = await genAI.models.generateContent({
     model,
     contents: [{ role: "user", parts }],
-    config: { temperature: 0.15, responseMimeType: "application/json" },
+    // NO responseMimeType:"application/json" — we want plain text output
+    config: { temperature: 0.2 },
   });
-  return result.text ?? "{}";
+  return result.text ?? "";
 }
 
 async function callGroq(key: string, model: string, messages: any[]): Promise<string> {
@@ -114,8 +231,8 @@ async function callGroq(key: string, model: string, messages: any[]): Promise<st
     body: JSON.stringify({
       model,
       messages,
-      response_format: { type: "json_object" },
-      temperature: 0.1,
+      // No response_format JSON for plain text
+      temperature: 0.2,
     }),
   });
   if (!resp.ok) {
@@ -126,130 +243,7 @@ async function callGroq(key: string, model: string, messages: any[]): Promise<st
     throw err;
   }
   const data = await resp.json();
-  return data.choices?.[0]?.message?.content ?? "{}";
-}
-
-// ─── Sleep helper ─────────────────────────────────────────────────────────────
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-
-// ─── Visual context cache ─────────────────────────────────────────────────────
-const visualContextCache = new Map<string, string>();
-
-async function analyzeVisual(
-  data: string | string[],
-  mimeType: string,
-  mediaType: string,
-  geminiKey: string
-): Promise<string> {
-  const cacheKey = (Array.isArray(data) ? data[0] : data).substring(0, 40);
-  if (visualContextCache.has(cacheKey)) return visualContextCache.get(cacheKey)!;
-
-  const parts: any[] = [];
-  if (Array.isArray(data)) {
-    // Use all frames: first (awal), middle (tengah), last (akhir)
-    const indices = data.length >= 3
-      ? [0, Math.floor(data.length / 2), data.length - 1]
-      : [0, Math.floor(data.length / 2)];
-    indices.forEach(i => {
-      if (data[i]) parts.push({ inlineData: { data: data[i], mimeType: "image/jpeg" } });
-    });
-  } else {
-    parts.push({ inlineData: { data, mimeType } });
-  }
-  const frameNote = Array.isArray(data) && data.length >= 3
-    ? " Frames shown: [AWAL/START], [TENGAH/MIDDLE], [AKHIR/END] — describe the full video arc."
-    : "";
-  parts.push({
-    text: `Visual audit for microstock SEO (max 120 words): 1.Main subject 2.Secondary objects 3.Setting 4.Lighting & mood 5.Commercial use case${mediaType === "Video" ? " 6.Camera movement/action/pace" : ""}.${frameNote} Be concise and specific.`,
-  });
-
-  try {
-    const genAI = new GoogleGenAI({ apiKey: geminiKey });
-    const result = await genAI.models.generateContent({
-      model: STABLE_MODELS.GeminiFlash,
-      contents: [{ role: "user", parts }],
-      config: { temperature: 0.1 },
-    });
-    const ctx = result.text ?? "";
-    if (ctx) visualContextCache.set(cacheKey, ctx);
-    return ctx;
-  } catch (e) {
-    console.warn("Visual analysis failed, continuing without it:", e);
-    return "";
-  }
-}
-
-// ─── Build metadata prompt ────────────────────────────────────────────────────
-function buildMetadataPrompt(opts: {
-  visualCtx: string; fileName: string; theme: string;
-  mediaType: string; mediaHint: string;
-  platforms: string[]; language: string;
-  titleCount: number; descCount: number; numberOfKeywords: number;
-}): string {
-  const adobeCats = "Animals,Architecture,Business,Drinks,Environment,States of Mind,Food,Graphic Resources,Hobbies,Industry,Landscapes,Lifestyle,People,Plants,Culture,Science,Social Issues,Sports,Technology,Transport,Travel";
-  const visual = opts.visualCtx || `File: ${opts.fileName} | Theme: ${opts.theme}`;
-  return `You are an elite microstock metadata engineer optimizing for ${opts.platforms.join(", ")} in 2026.
-
-VISUAL CONTEXT: ${visual}
-MEDIA TYPE: ${opts.mediaType} — ${opts.mediaHint}
-OUTPUT LANGUAGE: ${opts.language}
-
-STRICT RULES — FOLLOW EXACTLY:
-1. NO brands/trademarks/IP — use generics ("smartphone" not "iPhone").
-2. TITLE: SEO-optimized. Most searchable subject FIRST. Specific and commercially relevant to the actual visual. HARD LIMIT: ${opts.titleCount} characters. Do NOT exceed. Write the strongest possible SEO title within ${opts.titleCount} chars.
-3. DESCRIPTION: One professional SEO sentence describing the real visual content. HARD LIMIT: ${opts.descCount} characters. Do NOT exceed.
-4. KEYWORDS: Exactly ${opts.numberOfKeywords} unique terms, ordered by search volume (most searched first). All keywords MUST be directly relevant to what is actually shown. No generic filler.
-5. CATEGORIES: Exactly one per platform [${opts.platforms.join(", ")}].
-   Adobe Stock must use one of: ${adobeCats}.
-6. seoScore: integer 1-100 reflecting real commercial potential of this asset.
-7. seoInsights: exactly 2 objects [{label, value, impact}] with actionable insights.
-8. marketInsight: 1 sentence on specific commercial potential for this exact asset.
-
-CRITICAL: Base ALL metadata on the actual visual content provided. The title, description, and keywords must accurately and specifically describe what is seen. Do NOT generate generic or placeholder metadata.
-
-Respond ONLY with valid JSON matching this exact structure:
-{
-  "title": "",
-  "description": "",
-  "categories": [{"platform": "", "category": ""}],
-  "keywords": [{"term": "", "seoTier": "High"}],
-  "marketInsight": "",
-  "seoScore": 75,
-  "seoInsights": [{"label": "", "value": "", "impact": ""}]
-}`;
-}
-
-// ─── Parse & clean raw JSON response ─────────────────────────────────────────
-function parseMetadata(raw: string, titleCount: number, descCount: number, numberOfKeywords: number): GeneratedMetadata {
-  const parsed = JSON.parse(repairJson(extractJson(raw))) as GeneratedMetadata;
-
-  if (parsed.title) parsed.title = parsed.title.trim().substring(0, titleCount);
-  if (parsed.description) parsed.description = parsed.description.trim().substring(0, descCount);
-
-  if (Array.isArray(parsed.keywords)) {
-    const terms = parsed.keywords.map((kw: any) => typeof kw === "string" ? kw : (kw.term ?? ""));
-    const cleaned = cleanKeywords(terms, numberOfKeywords);
-    parsed.keywords = cleaned.map((term, i) => ({
-      term,
-      seoTier: (i < 10 ? "High" : i < 30 ? "Medium" : "Low") as "High" | "Medium" | "Low",
-    }));
-  } else {
-    parsed.keywords = [];
-  }
-
-  if (Array.isArray(parsed.categories)) {
-    const seen = new Set<string>();
-    parsed.categories = parsed.categories
-      .map((c: any) => typeof c === "string"
-        ? { platform: "General", category: c }
-        : { platform: c.platform ?? "General", category: c.category ?? "Unknown" })
-      .filter(c => { if (seen.has(c.platform)) return false; seen.add(c.platform); return true; });
-  } else {
-    parsed.categories = [];
-  }
-
-  if (!parsed.suggestedKeywords) parsed.suggestedKeywords = [];
-  return parsed;
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 // ─── generateAIPrompts ────────────────────────────────────────────────────────
@@ -302,7 +296,6 @@ Output ONLY a JSON array of exactly ${count} prompt strings. No other text.`;
         if (provider === "Groq") {
           raw = await callGroq(key, modelName, [{ role: "user", content: prompt }]);
         } else {
-          // Use text-only for prompts (cheaper, no vision needed)
           const genAI = new GoogleGenAI({ apiKey: key });
           const result = await genAI.models.generateContent({
             model: modelName,
@@ -311,9 +304,12 @@ Output ONLY a JSON array of exactly ${count} prompt strings. No other text.`;
           });
           raw = result.text ?? "[]";
         }
-        const cleaned = extractJson(raw).replace(/^\[/, "["); // ensure array
-        const arr = JSON.parse(cleaned.startsWith("[") ? cleaned : `[${cleaned}]`);
-        if (Array.isArray(arr) && arr.length > 0) return arr;
+        // Try to extract JSON array
+        const arrayMatch = raw.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          const arr = JSON.parse(arrayMatch[0]);
+          if (Array.isArray(arr) && arr.length > 0) return arr;
+        }
       } catch (e: any) {
         console.warn(`generateAIPrompts attempt ${attempt + 1} failed:`, e.message);
         if ((e.status === 429) || e.message?.includes("429") || e.message?.includes("RESOURCE_EXHAUSTED")) {
@@ -337,7 +333,6 @@ export async function generateSuggestedThemes(
   const keys = (apiKeys || []).filter(Boolean);
   if (keys.length === 0) return [];
 
-  // Always use lite/cheap model for this simple task
   const model = provider === "Groq" ? (modelName || STABLE_MODELS.Groq) : STABLE_MODELS.GeminiFlashLite;
   const prompt = `List 12 high-commercial-value theme ideas for ${type === "Background" ? "stock background images" : "isolated PNG stock assets"} on Adobe Stock in 2026. Topics: AI, sustainability, diverse lifestyle, health, abstract 3D, business. Output ONLY a JSON array of short strings (3-6 words each). No explanations.`;
 
@@ -355,9 +350,7 @@ export async function generateSuggestedThemes(
         });
         raw = result.text ?? "[]";
       }
-      // Try parsing as JSON array
-      const extracted = raw.trim();
-      const arrayMatch = extracted.match(/\[[\s\S]*\]/);
+      const arrayMatch = raw.trim().match(/\[[\s\S]*\]/);
       if (arrayMatch) {
         const arr = JSON.parse(arrayMatch[0]);
         if (Array.isArray(arr) && arr.length > 0) return arr;
@@ -393,66 +386,67 @@ export async function generateStockMetadata(
     throw new Error("No API keys provided. Please add at least one API key in Settings.");
   }
 
-  const supportsVision = ["image/png","image/jpeg","image/webp","image/heic","image/heif"].includes(mimeType);
+  const isVideo = Array.isArray(base64Data);
+  const supportsVision = isVideo || ["image/png","image/jpeg","image/webp","image/heic","image/heif"].includes(mimeType);
 
-  // ── Compress images to save tokens ──────────────────────────────────────────
+  // ── Compress to reduce token cost ───────────────────────────────────────────
   let compressed: string | string[] = base64Data;
-  if (supportsVision && !Array.isArray(base64Data)) {
-    try { compressed = await compressImageBase64(base64Data, 1024, 0.82); } catch (_) {}
-  } else if (Array.isArray(base64Data)) {
+  if (!isVideo && supportsVision) {
+    try { compressed = await compressImageBase64(base64Data as string, 1024, 0.82); } catch (_) {}
+  } else if (isVideo) {
     try {
+      // Compress all 3 frames (awal, tengah, akhir)
       compressed = await Promise.all(
-        base64Data.slice(0, 2).map(f => compressImageBase64(f, 800, 0.78))
+        (base64Data as string[]).slice(0, 3).map(f => compressImageBase64(f, 900, 0.80))
       );
-    } catch (_) {}
+    } catch (_) { compressed = (base64Data as string[]).slice(0, 3); }
   }
 
-  // ── Media type hints ─────────────────────────────────────────────────────────
-  const mediaHint =
-    mediaType === "Video"  ? "Camera technique, movement, speed, lighting style. Include: 4k, cinematic, slow-motion." :
-    mediaType === "Vektor" ? "Illustration style: flat/isometric/line art. Include: scalable, editable, vector." :
-                             "Lighting quality, texture detail, commercial atmosphere, professional.";
+  // ── Build the prompt ─────────────────────────────────────────────────────────
+  const prompt = buildMetadataPrompt({
+    mediaType,
+    fileName,
+    theme,
+    platforms,
+    language,
+    titleCount,
+    descCount,
+    numberOfKeywords,
+    isVideo,
+  });
 
   // ── Try Gemini ───────────────────────────────────────────────────────────────
   const tryGemini = async (model: string): Promise<GeneratedMetadata | null> => {
-    // Step 1: Get visual description (uses cache after first call)
-    let visualCtx = "";
-    if (supportsVision && keys.length > 0) {
-      onStatusUpdate?.("🔍 Analyzing visual content...");
-      visualCtx = await analyzeVisual(compressed, mimeType, mediaType, keys[0]);
-    }
-
-    const prompt = buildMetadataPrompt({ visualCtx, fileName, theme, mediaType, mediaHint, platforms, language, titleCount, descCount, numberOfKeywords });
-
-    // Step 2: Build parts — always attach video frames; attach image if visual analysis failed
+    // Always send the actual image/frames directly to the model
     const parts: any[] = [];
-    if (Array.isArray(compressed)) {
-      // Video: always attach all 3 frames (awal, tengah, akhir) for accurate metadata
-      (compressed as string[]).forEach(f => parts.push({ inlineData: { data: f, mimeType: "image/jpeg" } }));
-    } else if (supportsVision && !visualCtx) {
-      // Image: attach directly only as fallback when visual analysis failed
-      parts.push({ inlineData: { data: compressed, mimeType } });
+
+    if (isVideo) {
+      // Attach all 3 frames: AWAL, TENGAH, AKHIR
+      const labels = ["[FRAME: START/AWAL]", "[FRAME: MIDDLE/TENGAH]", "[FRAME: END/AKHIR]"];
+      (compressed as string[]).forEach((f, i) => {
+        parts.push({ text: labels[i] ?? `[FRAME ${i + 1}]` });
+        parts.push({ inlineData: { data: f, mimeType: "image/jpeg" } });
+      });
+    } else if (supportsVision) {
+      parts.push({ inlineData: { data: compressed as string, mimeType } });
     }
+
     parts.push({ text: prompt });
 
     for (const key of keys) {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           onStatusUpdate?.(`⚡ Generating metadata [${model}]${attempt > 0 ? ` retry ${attempt}` : ""}...`);
-          const raw = await callGemini(key, model, parts);
-          const result = parseMetadata(raw, titleCount, descCount, numberOfKeywords);
-          if (result.title) return result; // Only accept if we got a title
-          throw new Error("Empty response from model");
+          const raw = await callGeminiText(key, model, parts);
+          const result = parsePlainTextMetadata(raw, numberOfKeywords, titleCount, descCount, platforms, mediaType);
+          if (result?.title) return result;
+          throw new Error("Could not parse metadata from response");
         } catch (e: any) {
           const isQuota = e.status === 429 || e.message?.includes("429") || e.message?.includes("RESOURCE_EXHAUSTED") || e.message?.includes("quota");
           const isModelError = e.message?.includes("404") || e.message?.includes("not found") || e.message?.includes("INVALID_ARGUMENT");
           console.warn(`Gemini ${model} attempt ${attempt + 1} failed:`, e.message);
-          if (isModelError) break; // Don't retry with same bad model
-          if (isQuota) {
-            await sleep(4000 * (attempt + 1));
-          } else {
-            await sleep(1500 * (attempt + 1));
-          }
+          if (isModelError) break;
+          if (isQuota) { await sleep(4000 * (attempt + 1)); } else { await sleep(1500 * (attempt + 1)); }
         }
       }
     }
@@ -461,14 +455,14 @@ export async function generateStockMetadata(
 
   // ── Try Groq ─────────────────────────────────────────────────────────────────
   const tryGroq = async (model: string): Promise<GeneratedMetadata | null> => {
-    const prompt = buildMetadataPrompt({ visualCtx: `File: ${fileName} | Theme: ${theme}`, fileName, theme, mediaType, mediaHint, platforms, language, titleCount, descCount, numberOfKeywords });
+    const userContent: any[] = [];
 
-    const userContent: any[] = [{ type: "text", text: prompt }];
-    // Only Llama 4 Scout / Vision models support images
+    // Vision-capable models: attach frames/image
     if (model.includes("llama-4") || model.includes("vision")) {
-      if (Array.isArray(compressed)) {
-        // Video: attach all 3 frames for accurate metadata
-        (compressed as string[]).forEach(f => {
+      if (isVideo) {
+        const labels = ["[FRAME: START/AWAL]", "[FRAME: MIDDLE/TENGAH]", "[FRAME: END/AKHIR]"];
+        (compressed as string[]).forEach((f, i) => {
+          userContent.push({ type: "text", text: labels[i] ?? `[FRAME ${i + 1}]` });
           userContent.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${f}` } });
         });
       } else if (supportsVision) {
@@ -476,14 +470,16 @@ export async function generateStockMetadata(
       }
     }
 
+    userContent.push({ type: "text", text: prompt });
+
     for (const key of keys) {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           onStatusUpdate?.(`⚡ Generating metadata [Groq/${model}]${attempt > 0 ? ` retry ${attempt}` : ""}...`);
           const raw = await callGroq(key, model, [{ role: "user", content: userContent }]);
-          const result = parseMetadata(raw, titleCount, descCount, numberOfKeywords);
-          if (result.title) return result;
-          throw new Error("Empty response from Groq");
+          const result = parsePlainTextMetadata(raw, numberOfKeywords, titleCount, descCount, platforms, mediaType);
+          if (result?.title) return result;
+          throw new Error("Could not parse metadata from Groq response");
         } catch (e: any) {
           const isQuota = (e as any).status === 429 || e.message?.includes("429");
           const isModelError = (e as any).status === 404 || e.message?.includes("404") || e.message?.includes("not found");
@@ -497,32 +493,28 @@ export async function generateStockMetadata(
     return null;
   };
 
-  // ── Execution strategy based on selected provider ────────────────────────────
+  // ── Execution strategy ───────────────────────────────────────────────────────
   let result: GeneratedMetadata | null = null;
   const primaryModel = modelName || (provider === "Groq" ? STABLE_MODELS.Groq : STABLE_MODELS.GeminiFlash);
 
+  onStatusUpdate?.("🔍 Analyzing visual content...");
+
   if (provider === "Gemini") {
-    // Try selected model first
     result = await tryGemini(primaryModel);
-    // Fallback to Flash if a different (possibly bad) model was selected
     if (!result && primaryModel !== STABLE_MODELS.GeminiFlash) {
       onStatusUpdate?.("🔄 Trying fallback Gemini model...");
       result = await tryGemini(STABLE_MODELS.GeminiFlash);
     }
-    // Last resort: Flash Lite (most lenient quota)
     if (!result && primaryModel !== STABLE_MODELS.GeminiFlashLite) {
       onStatusUpdate?.("🔄 Trying Gemini Flash Lite...");
       result = await tryGemini(STABLE_MODELS.GeminiFlashLite);
     }
   } else {
-    // Groq primary
     result = await tryGroq(primaryModel);
-    // Fallback to Groq stable model
     if (!result && primaryModel !== STABLE_MODELS.Groq) {
       onStatusUpdate?.("🔄 Trying fallback Groq model...");
       result = await tryGroq(STABLE_MODELS.Groq);
     }
-    // Final fallback: llama3-8b (highest free-tier limit)
     if (!result) {
       onStatusUpdate?.("🔄 Trying Groq llama3-8b...");
       result = await tryGroq("llama3-8b-8192");
