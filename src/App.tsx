@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Image as ImageIcon, FileVideo, Layers, UploadCloud, Trash2, Copy, Download, RefreshCw, Sun, Moon, Key, Play, Clock, Heart, PenTool, Video, Zap, Info, Cpu, CheckCircle2, Maximize, Palette, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
-import { generateStockMetadata, GeneratedMetadata, generateAIPrompts, generateSuggestedThemes } from './services/geminiService';
+import { generateStockMetadata, GeneratedMetadata, generateAIPrompts, generateSuggestedThemes, compressImageBase64 } from './services/geminiService';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signOut } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp, getDocFromServer, onSnapshot, disableNetwork } from 'firebase/firestore';
@@ -235,7 +235,7 @@ function AppContent() {
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['Adobe Stock']);
   const [uploadMode, setUploadMode] = useState<'Single' | 'Batch'>('Batch');
   const [statusFilter, setStatusFilter] = useState<'All' | 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ERROR'>('All');
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.0-flash');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.0-flash-lite');
   const [selectedGroqModel, setSelectedGroqModel] = useState<string>('meta-llama/llama-4-scout-17b-16e-instruct');
   const [apiKeys, setApiKeys] = useState<{key: string, enabled: boolean}[]>([]);
   const [groqApiKeys, setGroqApiKeys] = useState<{key: string, enabled: boolean}[]>([]);
@@ -769,9 +769,17 @@ function AppContent() {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
-      reader.onload = () => {
+      reader.onload = async () => {
         if (typeof reader.result === 'string') {
           const base64Data = reader.result.split(',')[1];
+          // Compress images > 500KB to reduce API token usage
+          if (file.type.startsWith('image/') && file.size > 500_000) {
+            try {
+              const compressed = await compressImageBase64(base64Data, 1024, 0.82);
+              resolve(compressed);
+              return;
+            } catch (_) {}
+          }
           resolve(base64Data);
         } else {
           reject(new Error("Failed to read file as base64"));
@@ -796,11 +804,10 @@ function AppContent() {
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         
-        // Extract 3 specific frames: Awal (10%), Tengah (50%), Akhir (90%)
+        // Extract 2 frames: Awal (15%) dan Tengah (55%) — 2 frames saves ~33% API tokens vs 3
         const targetTimes = [
-          duration * 0.1, // Awal (10% untuk menghindari fade-in hitam)
-          duration * 0.5, // Tengah
-          duration * 0.9  // Akhir (90% untuk menghindari fade-out hitam)
+          duration * 0.15, // Awal (15% untuk menghindari fade-in hitam)
+          duration * 0.55, // Tengah-akhir
         ];
         
         for (const time of targetTimes) {
@@ -812,10 +819,17 @@ function AppContent() {
           });
 
           if (video.videoWidth && video.videoHeight && context) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            // Limit frame size to 800px to reduce API token cost
+            const MAX_DIM = 800;
+            let fw = video.videoWidth, fh = video.videoHeight;
+            if (fw > MAX_DIM || fh > MAX_DIM) {
+              if (fw > fh) { fh = Math.round(fh * MAX_DIM / fw); fw = MAX_DIM; }
+              else { fw = Math.round(fw * MAX_DIM / fh); fh = MAX_DIM; }
+            }
+            canvas.width = fw;
+            canvas.height = fh;
+            context.drawImage(video, 0, 0, fw, fh);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
             const base64Data = dataUrl.split(',')[1];
             frames.push(base64Data);
           }
@@ -1823,13 +1837,12 @@ function AppContent() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {apiProviderTab === 'Gemini' ? (
                   [
-                    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', sub: 'Balanced', desc: 'Fast and efficient model for metadata engineering.' },
-                    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', sub: 'High reasoning', desc: 'Powerful model for deep semantic understanding of assets.' },
-                    { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro', sub: 'Advanced', desc: 'Advanced reasoning model for complex tasks.' },
-                    { id: 'gemini-2.0-flash-thinking', label: 'Gemini 2.0 Flash Thinking', sub: 'Expert', desc: 'Expert model for complex reasoning and analysis.' },
-                    { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', sub: 'Latest', desc: 'The latest Gemini model with state-of-the-art performance.' },
-                    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite', sub: 'Fastest', desc: 'Lightweight model for maximum speed.' },
-                    { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', sub: 'Powerful', desc: 'Powerful model for high-end reasoning.' }
+                    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', sub: 'Recommended', desc: 'Best balance of speed, vision, and cost. Ideal for batch metadata.' },
+                    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', sub: 'Most Economical', desc: 'Cheapest option. Great for high-volume keywording with minimal API cost.' },
+                    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', sub: 'Fast & Reliable', desc: 'Proven stable model with solid vision accuracy for microstock.' },
+                    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', sub: 'High Quality', desc: 'Deeper semantic understanding. Best for nuanced or complex assets.' },
+                    { id: 'gemini-2.5-flash-preview-04-17', label: 'Gemini 2.5 Flash', sub: 'Experimental', desc: 'Latest preview model. Higher quality output, may have rate limits.' },
+                    { id: 'gemini-2.5-pro-preview-05-06', label: 'Gemini 2.5 Pro', sub: 'Premium', desc: 'Most advanced reasoning. Best quality — higher cost per request.' }
                   ].map((model) => (
                     <button
                       key={model.id}
@@ -1848,10 +1861,10 @@ function AppContent() {
                   ))
                 ) : (
                   [
-                    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'LLama 4 Scout 17B', sub: 'New', desc: 'Powerful multimodal model for rapid reasoning on Groq.' },
-                    { id: 'llama-3.3-70b-versatile', label: 'LLama 3.3 70B', sub: 'Stable', desc: 'Powerful model for rapid reasoning on Groq.' },
-                    { id: 'llama3-70b-8192', label: 'LLama 3 70B', sub: 'High reasoning', desc: 'Heavy weight reasoning and accuracy.' },
-                    { id: 'llama3-8b-8192', label: 'LLama 3 8B', sub: 'Fastest', desc: 'Lightweight and exceptionally fast model.' }
+                    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'LLama 4 Scout 17B', sub: 'Recommended', desc: 'Latest multimodal model. Supports image input on Groq.' },
+                    { id: 'llama-3.3-70b-versatile', label: 'LLama 3.3 70B', sub: 'Stable & Fast', desc: 'Best text-only model on Groq. Most stable for metadata tasks.' },
+                    { id: 'llama3-70b-8192', label: 'LLama 3 70B', sub: 'Classic', desc: 'Proven high-quality reasoning. Reliable fallback.' },
+                    { id: 'llama3-8b-8192', label: 'LLama 3 8B', sub: 'Fastest / Free Tier', desc: 'Lightest model — best for free Groq tier with high rate limits.' }
                   ].map((model) => (
                     <button
                       key={model.id}
