@@ -146,14 +146,21 @@ async function analyzeVisual(
 
   const parts: any[] = [];
   if (Array.isArray(data)) {
-    [0, Math.floor(data.length / 2)].forEach(i => {
+    // Use all frames: first (awal), middle (tengah), last (akhir)
+    const indices = data.length >= 3
+      ? [0, Math.floor(data.length / 2), data.length - 1]
+      : [0, Math.floor(data.length / 2)];
+    indices.forEach(i => {
       if (data[i]) parts.push({ inlineData: { data: data[i], mimeType: "image/jpeg" } });
     });
   } else {
     parts.push({ inlineData: { data, mimeType } });
   }
+  const frameNote = Array.isArray(data) && data.length >= 3
+    ? " Frames shown: [AWAL/START], [TENGAH/MIDDLE], [AKHIR/END] — describe the full video arc."
+    : "";
   parts.push({
-    text: `Visual audit for microstock SEO (max 100 words): 1.Main subject 2.Secondary objects 3.Setting 4.Lighting & mood 5.Commercial use case${mediaType === "Video" ? " 6.Camera movement" : ""}. Be concise.`,
+    text: `Visual audit for microstock SEO (max 120 words): 1.Main subject 2.Secondary objects 3.Setting 4.Lighting & mood 5.Commercial use case${mediaType === "Video" ? " 6.Camera movement/action/pace" : ""}.${frameNote} Be concise and specific.`,
   });
 
   try {
@@ -187,16 +194,18 @@ VISUAL CONTEXT: ${visual}
 MEDIA TYPE: ${opts.mediaType} — ${opts.mediaHint}
 OUTPUT LANGUAGE: ${opts.language}
 
-RULES:
+STRICT RULES — FOLLOW EXACTLY:
 1. NO brands/trademarks/IP — use generics ("smartphone" not "iPhone").
-2. TITLE: Most searchable subject first. Target ~${opts.titleCount} chars (hard max ${opts.titleCount}).
-3. DESCRIPTION: One professional SEO sentence. Target ~${opts.descCount} chars (hard max ${opts.descCount}).
-4. KEYWORDS: Exactly ${opts.numberOfKeywords} unique single-word terms, ordered by search importance.
+2. TITLE: SEO-optimized. Most searchable subject FIRST. Specific and commercially relevant to the actual visual. HARD LIMIT: ${opts.titleCount} characters. Do NOT exceed. Write the strongest possible SEO title within ${opts.titleCount} chars.
+3. DESCRIPTION: One professional SEO sentence describing the real visual content. HARD LIMIT: ${opts.descCount} characters. Do NOT exceed.
+4. KEYWORDS: Exactly ${opts.numberOfKeywords} unique terms, ordered by search volume (most searched first). All keywords MUST be directly relevant to what is actually shown. No generic filler.
 5. CATEGORIES: Exactly one per platform [${opts.platforms.join(", ")}].
    Adobe Stock must use one of: ${adobeCats}.
-6. seoScore: integer 1-100.
-7. seoInsights: exactly 2 objects [{label, value, impact}].
-8. marketInsight: 1 sentence on commercial potential.
+6. seoScore: integer 1-100 reflecting real commercial potential of this asset.
+7. seoInsights: exactly 2 objects [{label, value, impact}] with actionable insights.
+8. marketInsight: 1 sentence on specific commercial potential for this exact asset.
+
+CRITICAL: Base ALL metadata on the actual visual content provided. The title, description, and keywords must accurately and specifically describe what is seen. Do NOT generate generic or placeholder metadata.
 
 Respond ONLY with valid JSON matching this exact structure:
 {
@@ -415,15 +424,14 @@ export async function generateStockMetadata(
 
     const prompt = buildMetadataPrompt({ visualCtx, fileName, theme, mediaType, mediaHint, platforms, language, titleCount, descCount, numberOfKeywords });
 
-    // Step 2: Build parts — only attach image if visual analysis failed (fallback)
+    // Step 2: Build parts — always attach video frames; attach image if visual analysis failed
     const parts: any[] = [];
-    if (supportsVision && !visualCtx) {
-      // Attach image directly as fallback
-      if (Array.isArray(compressed)) {
-        (compressed as string[]).forEach(f => parts.push({ inlineData: { data: f, mimeType: "image/jpeg" } }));
-      } else {
-        parts.push({ inlineData: { data: compressed, mimeType } });
-      }
+    if (Array.isArray(compressed)) {
+      // Video: always attach all 3 frames (awal, tengah, akhir) for accurate metadata
+      (compressed as string[]).forEach(f => parts.push({ inlineData: { data: f, mimeType: "image/jpeg" } }));
+    } else if (supportsVision && !visualCtx) {
+      // Image: attach directly only as fallback when visual analysis failed
+      parts.push({ inlineData: { data: compressed, mimeType } });
     }
     parts.push({ text: prompt });
 
@@ -457,8 +465,15 @@ export async function generateStockMetadata(
 
     const userContent: any[] = [{ type: "text", text: prompt }];
     // Only Llama 4 Scout / Vision models support images
-    if ((model.includes("llama-4") || model.includes("vision")) && !Array.isArray(compressed) && supportsVision) {
-      userContent.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${compressed}` } });
+    if (model.includes("llama-4") || model.includes("vision")) {
+      if (Array.isArray(compressed)) {
+        // Video: attach all 3 frames for accurate metadata
+        (compressed as string[]).forEach(f => {
+          userContent.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${f}` } });
+        });
+      } else if (supportsVision) {
+        userContent.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${compressed}` } });
+      }
     }
 
     for (const key of keys) {

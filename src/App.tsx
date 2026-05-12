@@ -805,10 +805,11 @@ function AppContent() {
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         
-        // Extract 2 frames: Awal (15%) dan Tengah (55%) — 2 frames saves ~33% API tokens vs 3
+        // Extract 3 frames: Awal (10%), Tengah (50%), Akhir (90%)
         const targetTimes = [
-          duration * 0.15, // Awal (15% untuk menghindari fade-in hitam)
-          duration * 0.55, // Tengah-akhir
+          duration * 0.10, // Awal (10% untuk menghindari fade-in hitam)
+          duration * 0.50, // Tengah
+          duration * 0.90, // Akhir (90% untuk menghindari fade-out hitam)
         ];
         
         for (const time of targetTimes) {
